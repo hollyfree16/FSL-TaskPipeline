@@ -1,0 +1,8 @@
+# Ignore compiled Python files
+*.pyc
+__pycache__/
+
+# Ignore other unnecessary files (optional)
+.DS_Store
+.vscode/
+*.log
