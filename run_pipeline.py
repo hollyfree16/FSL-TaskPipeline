@@ -1,60 +1,120 @@
 #!/usr/bin/env python3
 
 import argparse
-import sys
+import time
+import resource  # Unix-specific; consider psutil for Windows compatibility
+import psutil  # To track child processes
 import os
+
 from utils.run_motion_outliers import main as run_motion_outliers_main
 from utils.run_synthstrip import main as run_synthstrip_main
 from utils.extract_parameters import main as extract_parameters_main
 from utils.generate_design_files import main as generate_design_files_main
+from utils.generate_higher_level_feat_files import main as generate_higher_level_feat_files_main
+
+def get_total_memory_usage():
+    """Get peak memory usage including child processes."""
+    process = psutil.Process()
+    mem_usage = process.memory_info().rss  # Resident Set Size (bytes)
+    for child in process.children(recursive=True):
+        mem_usage += child.memory_info().rss
+    return mem_usage / (1024 * 1024)  # Convert to MB
+
+def get_total_cpu_time():
+    """Get CPU time usage including child processes."""
+    process = psutil.Process()
+    cpu_time = process.cpu_times().user + process.cpu_times().system
+    for child in process.children(recursive=True):
+        cpu_time += child.cpu_times().user + child.cpu_times().system
+    return cpu_time
 
 def main():
     parser = argparse.ArgumentParser(description="Wrapper script to run all FSL Task Pipeline steps.")
 
-    # Arguments for run_motion_outliers
-    parser.add_argument("--motion_input_base_dir", required=True, help="Input directory for motion outliers.")
-    parser.add_argument("--motion_output_base_dir", required=True, help="Output directory for motion outliers.")
-    parser.add_argument("--motion_max_workers", type=int, default=10, help="Max workers for motion outliers.")
+    # Core arguments
+    parser.add_argument("--input_directory", required=True, help="Input BIDS directory.")
+    parser.add_argument("--output_directory", required=True, help="Output directory.")
+    parser.add_argument("--fsf_template", required=True, help="Path to the .fsf template file.")
+    parser.add_argument("--task", required=True, help="Task name (e.g., hand).")
+    parser.add_argument("--run", nargs='+', type=int, required=True, help="Run numbers to process (e.g., --run 1 2).")
+    parser.add_argument("--subjects", required=False, help="List of subjects to process. Can be passed directly as comma-separated values or a text file. Default will process entire directory.")
+    parser.add_argument("--custom_block", nargs='*', default=[], help="Custom block inputs (optional).")
+    parser.add_argument("--write_commands", required=False, help="Instead of running commands locally, write all commands to a text file for HPC execution.")
+    parser.add_argument("--max_workers", type=int, default=10, help="Maximum number of parallel workers.")
+    parser.add_argument("--first_level_space", default="native", help="Space label for first-level FEAT outputs.")
+    parser.add_argument("--higher_level_space", default="mni", help="Space label for higher-level FEAT outputs.")
+    parser.add_argument("--higher_level_fsf_template", required=False, help="Path to the higher-level .fsf template file.")
 
-    # Arguments for run_synthstrip
-    parser.add_argument("--synthstrip_input_base_dir", required=True, help="Input directory for skull stripping.")
-    parser.add_argument("--synthstrip_output_base_dir", required=True, help="Output directory for skull stripping.")
-    parser.add_argument("--synthstrip_max_workers", type=int, default=8, help="Max workers for skull stripping.")
-
-    # Arguments for extract_parameters
-    parser.add_argument("--extract_base_dir", required=True, help="Base directory for extracting scan info.")
-    parser.add_argument("--extract_output_dir", required=True, help="Output directory for scan info.")
-
-    # Arguments for generate_design_files
-    parser.add_argument("--preprocessing_dir", required=True, help="Path to preprocessing directory.")
-    parser.add_argument("--design_files_dir", required=True, help="Path to design files output directory.")
-    parser.add_argument("--parameter_files_root", required=True, help="Path to parameter files root directory.")
-    parser.add_argument("--custom_config_dir", required=True, help="Path to custom configuration directory.")
-    parser.add_argument("--standard_template_path", required=True, help="Path to standard design template.")
-    parser.add_argument("--custom_template_path", required=True, help="Path to custom design template.")
-    parser.add_argument("--base_output_dir", required=True, help="Base output directory for FEAT analyses.")
+    # New flag to track resources
+    parser.add_argument("--track_resources", action="store_true", help="Track system resources and runtime usage.")
 
     args = parser.parse_args()
 
-    # Run run_motion_outliers
-    run_motion_outliers_main(args.motion_input_base_dir, args.motion_output_base_dir, args.motion_max_workers)
+    if args.track_resources:
+        start_time = time.time()
+        start_cpu_time = get_total_cpu_time()
 
-    # Run run_synthstrip
-    run_synthstrip_main(args.synthstrip_input_base_dir, args.synthstrip_output_base_dir, args.synthstrip_max_workers)
-
-    # Run extract_parameters
-    extract_parameters_main(args.extract_base_dir, args.extract_output_dir)
-
-    # Run generate_design_files
+    # Run pipeline steps
+    run_motion_outliers_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, args.run)
+    run_synthstrip_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, args.run)
+    extract_parameters_main(args.input_directory, args.output_directory, args.subjects, args.task, args.run)
     generate_design_files_main(
-        args.preprocessing_dir,
-        args.design_files_dir,
-        args.parameter_files_root,
-        args.custom_config_dir,
-        args.standard_template_path,
-        args.custom_template_path,
-        args.base_output_dir
+        fsf_template=args.fsf_template,
+        output_directory=args.output_directory,
+        input_directory=args.input_directory,
+        task=args.task,
+        custom_block=args.custom_block,
+        subjects=args.subjects,
+        runs=args.run,
+        space=args.first_level_space,
     )
+    if args.higher_level_fsf_template:
+        analysis_blocks = args.custom_block if args.custom_block else ["standard"]
+        for block in analysis_blocks:
+            first_level_root = os.path.join(
+                args.output_directory,
+                "fsl_feat_v6.0.7.4",
+                block,
+                f"space-{args.first_level_space}",
+            )
+            higher_level_design_dir = os.path.join(
+                args.output_directory,
+                "fsl_feat_v6.0.7.4",
+                "higher_level_designs",
+                block,
+                f"space-{args.higher_level_space}",
+            )
+            higher_level_output_dir = os.path.join(
+                args.output_directory,
+                "fsl_feat_v6.0.7.4",
+                "higher_level_outputs",
+                block,
+                f"space-{args.higher_level_space}",
+            )
+            generate_higher_level_feat_files_main(
+                input_directory=first_level_root,
+                template_file=args.higher_level_fsf_template,
+                design_output_dir=higher_level_design_dir,
+                feat_output_dir=higher_level_output_dir,
+                run_pair=(1, 2),
+            )
+
+    if args.track_resources:
+        end_time = time.time()
+        end_cpu_time = get_total_cpu_time()
+        peak_memory = get_total_memory_usage()
+
+        runtime = end_time - start_time
+        cpu_time_used = end_cpu_time - start_cpu_time
+        # Get resource usage for the current process.
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+
+        print("\n--- Resource Usage Summary ---")
+        print(f"Total runtime: {runtime:.2f} seconds")
+        print(f"Total CPU time used: {cpu_time_used:.2f} seconds")
+        print(f"Peak memory usage: {peak_memory:.2f} MB")
+        print(f"Maximum resident set size (main process): {usage.ru_maxrss / 1024:.2f} MB")  # Convert KB to MB
+        print("--------------------------------")
 
     print("All pipeline steps completed successfully!")
 

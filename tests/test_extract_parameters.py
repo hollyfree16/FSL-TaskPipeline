@@ -13,8 +13,8 @@ def mock_file_structure(tmp_path):
     os.makedirs(base_dir / "sub-002" / "ses-002" / "func", exist_ok=True)
 
     # Create dummy .nii.gz files
-    (base_dir / "sub-001" / "ses-001" / "func" / "sub-001_synthstrip.nii.gz").write_text("dummy data")
-    (base_dir / "sub-002" / "ses-002" / "func" / "sub-002_synthstrip.nii.gz").write_text("dummy data")
+    (base_dir / "sub-001" / "ses-001" / "func" / "sub-001_ses-001_task-rest_run-01_bold.nii.gz").write_text("dummy data")
+    (base_dir / "sub-002" / "ses-002" / "func" / "sub-002_ses-002_task-rest_run-01_bold.nii.gz").write_text("dummy data")
 
     return str(base_dir), str(output_dir)
 
@@ -31,8 +31,22 @@ def test_extract_and_write_scan_info(mock_file_structure):
         extract_parameters.extract_and_write_scan_info(base_dir, output_dir)
 
     # Check that configuration files are created correctly
-    sub_001_config = os.path.join(output_dir, "parameters", "sub-001", "sub-001_configuration.md")
-    sub_002_config = os.path.join(output_dir, "parameters", "sub-002", "sub-002_configuration.md")
+    sub_001_config = os.path.join(
+        output_dir,
+        "fsl_feat_v6.0.7.4",
+        "configurations",
+        "sub-001",
+        "ses-001",
+        "sub-001_ses-001_task-rest_run-01_configuration.md",
+    )
+    sub_002_config = os.path.join(
+        output_dir,
+        "fsl_feat_v6.0.7.4",
+        "configurations",
+        "sub-002",
+        "ses-002",
+        "sub-002_ses-002_task-rest_run-01_configuration.md",
+    )
 
     assert os.path.exists(sub_001_config)
     assert os.path.exists(sub_002_config)
@@ -47,10 +61,14 @@ def test_extract_and_write_scan_info(mock_file_structure):
 # Test skipping existing configurations
 def test_skip_existing_configuration(mock_file_structure):
     base_dir, output_dir = mock_file_structure
-    sub_001_output_dir = os.path.join(output_dir, "parameters", "sub-001")
+    sub_001_output_dir = os.path.join(
+        output_dir, "fsl_feat_v6.0.7.4", "configurations", "sub-001", "ses-001"
+    )
     os.makedirs(sub_001_output_dir, exist_ok=True)
 
-    existing_config = os.path.join(sub_001_output_dir, "sub-001_configuration.md")
+    existing_config = os.path.join(
+        sub_001_output_dir, "sub-001_ses-001_task-rest_run-01_configuration.md"
+    )
     with open(existing_config, "w") as f:
         f.write("Existing content")
 
@@ -72,6 +90,8 @@ def test_non_nifti_files(mock_file_structure):
         extract_parameters.extract_and_write_scan_info(base_dir, output_dir)
 
     # Ensure non-NIfTI file was ignored and no additional configurations were created
-    config_dir = os.path.join(output_dir, "parameters", "sub-001")
-    assert os.path.exists(config_dir)  # Directory might exist
+    config_dir = os.path.join(
+        output_dir, "fsl_feat_v6.0.7.4", "configurations", "sub-001", "ses-001"
+    )
+    assert os.path.exists(config_dir)
     assert len(os.listdir(config_dir)) == 1  # Only the valid .nii.gz file's config exists

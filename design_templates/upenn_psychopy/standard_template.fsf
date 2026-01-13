@@ -83,7 +83,7 @@ set fmri(regunwarp_yn) 0
 set fmri(dwell) 0.7
 
 # EPI TE (ms)sub-R2c
-set fmri(te) 35
+set fmri(te) 30
 
 # % Signal loss threshold
 set fmri(signallossthresh) 10
@@ -280,7 +280,7 @@ set confoundev_files(1) {{ FULL_CONFOUND_PATH }}
 {% endif %}
 
 # Session's structural image for analysis 1
-set initial_highres_files(1) {{ FUNC_REG_IMAGE }}
+set initial_highres_files(1) {{ FULL_FUNCTIONAL_PATH }}
 
 # Subject's structural image for analysis 1
 set highres_files(1) {{ FULL_STRUCTURAL_PATH }}
@@ -319,13 +319,13 @@ set fmri(deriv_yn1) 1
 set fmri(skip1) 0
 
 # Off (EV 1)
-set fmri(off1) 17.5
+set fmri(off1) 16
 
 # On (EV 1)
-set fmri(on1) 17.5
+set fmri(on1) 16
 
 # Phase (EV 1)
-set fmri(phase1) 17.5
+set fmri(phase1) 16
 
 # Stop (EV 1)
 set fmri(stop1) -1

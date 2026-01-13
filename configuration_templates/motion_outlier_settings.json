@@ -1,0 +1,11 @@
+{
+    "dummy_scan_rules": [
+      { "frames": 39, "dummy": 9 },
+      { "frames": 114, "dummy": 2 },
+      { "frames": 482, "dummy": 2 },
+      { "frames": 184, "dummy": 2 },
+      { "frames": 260, "dummy": 4 }
+    ],
+    "default_dummy": 2
+  }
+  

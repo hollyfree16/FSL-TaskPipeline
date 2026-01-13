@@ -33,10 +33,21 @@ def test_check_dependencies():
 def test_process_file(mock_file_structure):
     input_dir, output_dir = mock_file_structure
     input_file = os.path.join(input_dir, "sub-001", "ses-001", "anat", "sub-001_ses-001_T1w.nii.gz")
-    output_file = os.path.join(output_dir, "sub-001", "ses-001", "anat", "sub-001_ses-001_T1w_synthstrip.nii.gz")
+    output_file = os.path.join(
+        output_dir,
+        "freesurfer_synthstrip_v8.1.0",
+        "sub-001",
+        "ses-001",
+        "anat",
+        "sub-001_ses-001_T1w_synthstrip.nii.gz",
+    )
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-    with patch("utils.run_synthstrip.subprocess.run") as mock_run:
+    with patch("utils.run_synthstrip.subprocess.run") as mock_run, \
+         patch("utils.run_synthstrip.nib.load") as mock_load:
+        mock_img = MagicMock()
+        mock_img.shape = (64, 64, 33)
+        mock_load.return_value = mock_img
         mock_run.return_value = MagicMock()
         run_synthstrip.process_file(input_file, input_dir, output_dir)
         mock_run.assert_called_once_with(
@@ -61,7 +72,7 @@ def test_main(mock_file_structure):
          patch("utils.run_synthstrip.check_dependencies") as mock_check:
         mock_process.return_value = None
         mock_check.return_value = None
-        run_synthstrip.main(input_dir, output_dir, max_workers=2)
+        run_synthstrip.main(input_dir, output_dir, None, max_workers=2)
         assert mock_process.call_count == 2  # Two input files
         mock_check.assert_called_once()
 
@@ -69,7 +80,14 @@ def test_main(mock_file_structure):
 def test_skip_existing_output(mock_file_structure):
     input_dir, output_dir = mock_file_structure
     input_file = os.path.join(input_dir, "sub-001", "ses-001", "anat", "sub-001_ses-001_T1w.nii.gz")
-    output_file = os.path.join(output_dir, "sub-001", "ses-001", "anat", "sub-001_ses-001_T1w_synthstrip.nii.gz")
+    output_file = os.path.join(
+        output_dir,
+        "freesurfer_synthstrip_v8.1.0",
+        "sub-001",
+        "ses-001",
+        "anat",
+        "sub-001_ses-001_T1w_synthstrip.nii.gz",
+    )
 
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     with open(output_file, "w") as f:

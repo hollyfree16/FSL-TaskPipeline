@@ -1,193 +1,231 @@
-#!/usr/bin/env python3
-
+import argparse
 import os
 import glob
-import re
-from jinja2 import Template
-import argparse
+from jinja2 import Environment, FileSystemLoader
+import subprocess
 
-def read_parameter_file(param_file_path):
+def parse_config_file(config_path):
+    """Parses the configuration file and extracts relevant parameters."""
     params = {}
-    with open(param_file_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#') or '=' not in line:
-                continue
-            key, value = line.split('=', 1)
-            params[key.strip()] = value.strip()
+    with open(config_path, 'r') as file:
+        for line in file:
+            if '=' in line:
+                key, value = line.strip().split('=')
+                params[key.strip()] = value.strip()
     return params
 
-def load_template(template_path):
-    with open(template_path, 'r') as f:
-        content = f.read()
-    return Template(content)
+def check_file_exists(path_pattern):
+    """Checks if a file matching the given pattern exists."""
+    files = glob.glob(path_pattern)
+    return files[0] if files else ""
 
-def generate_output_filename(subject_id, task, run, design_type):
-    if design_type == "standard":
-        return f"{subject_id}_task-{task}_run-{run}_bold_design-standard"
+def parse_subjects(subjects, input_base_dir):
+    """Parses subjects from a file or comma-separated list, or finds all 'sub-*/ses-*' directories."""
+    subject_dirs = []
+
+    if subjects:
+        if os.path.exists(subjects) and os.path.isfile(subjects):
+            with open(subjects, 'r') as f:
+                content = f.read().strip()
+            if ',' in content:
+                subjects_list = [s.strip() for s in content.split(',') if s.strip()]
+            else:
+                subjects_list = [line.strip() for line in content.splitlines() if line.strip()]
+        else:
+            subjects_list = [s.strip() for s in subjects.split(',') if s.strip()]
+
+        # Find session directories inside each subject directory
+        for sub in subjects_list:
+            subject_path = os.path.join(input_base_dir, sub)
+            if os.path.exists(subject_path) and os.path.isdir(subject_path):
+                # Look for session directories within the subject directory
+                session_dirs = glob.glob(os.path.join(subject_path, "ses-*"))
+                if session_dirs:
+                    subject_dirs.extend(session_dirs)  # Add session directories
+                else:
+                    print(f"Warning: No session directories found in {subject_path}")
+            else:
+                print(f"Warning: Subject directory not found: {subject_path}")
+
     else:
-        return f"{subject_id}_task-{task}_run-{run}_bold_design-{design_type}"
+        # Auto-detect all subjects and sessions
+        subject_dirs = sorted(glob.glob(os.path.join(input_base_dir, "sub-*", "ses-*")))
 
-def process_scan(subject_id, session_id, func_file, anat_file, parameter_dir, standard_template, custom_template, 
-                 design_files_dir, base_output_dir, custom_config_dir, custom_config_files):
-    basename = os.path.basename(func_file)
-    match = re.match(r'(sub-\w+)_task-([\w]+)_bold_run-(\d+)_synthstrip\.nii\.gz', basename)
-    if not match:
-        print(f"Filename {basename} does not match expected pattern. Skipping.")
-        return
-    sub, task, run = match.groups()
+    return subject_dirs
 
-    t1w_path = anat_file
-    bold_path = func_file
-
-    param_filename = f"{sub}_task-{task}_bold_run-{run}_configuration.md"
-    param_file_path = os.path.join(parameter_dir, param_filename)
-
-    if not os.path.exists(param_file_path):
-        print(f"Parameter file {param_file_path} not found. Skipping.")
-        return
-
-    params = read_parameter_file(param_file_path)
-
-    total_repetition_time = params.get("TOTAL_REPETITION_TIME")
-    total_frames = params.get("TOTAL_FRAMES")
-    discard_frames = params.get("DISCARD_FRAMES")
-    critical_z = params.get("CRITICAL_Z")
-    smoothing_kernel = params.get("SMOOTHING_KERNEL")
-    prob_threshold = params.get("PROB_THRESHOLD")
-    z_threshold = params.get("Z_THRESHOLD")
-    z_minimum = params.get("Z_MINIMUM")
-
-    confound_pattern = f"{sub}_task-{task}_bold_run-{run}_confounds.txt"
-    confound_file = os.path.join(os.path.dirname(func_file), confound_pattern)
-    confound_exists = os.path.exists(confound_file)
-
-    output_dir_name = generate_output_filename(sub, task, run, "standard")
-    output_directory = os.path.join(base_output_dir, sub, output_dir_name)
-    standard_design_filename = f"{output_dir_name}.fsf"
-    standard_design_path = os.path.join(design_files_dir, standard_design_filename)
-
-    if os.path.exists(standard_design_path):
-        print(f"Design file already exists, skipping: {standard_design_path}")
+def extract_subject_session_from_path(path):
+    """Extracts the subject ID and session ID from a given path.
+    
+    If the path is a directory (subject/session), then the subject is assumed to be the parent
+    directory and the session is the basename. Otherwise, for a file path, the function 
+    examines the parent directories.
+    """
+    if os.path.isdir(path):
+        # For directory paths like .../sub-R2c001/ses-001
+        subject_id = os.path.basename(os.path.dirname(path))
+        session_id = os.path.basename(path)
     else:
-        replacements_standard = {
-            "OUTPUT_DIRECTORY": output_directory,
-            "TOTAL_REPETITION_TIME": total_repetition_time,
-            "TOTAL_FRAMES": total_frames,
-            "DISCARD_FRAMES": discard_frames,
-            "CRITICAL_Z": critical_z,
-            "SMOOTHING_KERNEL": smoothing_kernel,
-            "PROB_THRESHOLD": prob_threshold,
-            "Z_THRESHOLD": z_threshold,
-            "Z_MINIMUM": z_minimum,
-            "FULL_STRUCTURAL_PATH": t1w_path,
-            "FULL_FUNCTIONAL_PATH": bold_path,
-            "CUSTOM_DESIGN_FILE": "",
-            "fmri_confoundevs": "1" if confound_exists else "0",
-            "FULL_CONFOUND_PATH": confound_file if confound_exists else "",
-            "FUNCTIONAL_TASK_NAME": task
-        }
+        # For file paths, use the parent directory
+        parts = os.path.dirname(path).split(os.sep)
+        subject_id = None
+        session_id = None
+        for part in parts:
+            if part.startswith("sub-"):
+                subject_id = part
+            elif part.startswith("ses-"):
+                session_id = part
+    return subject_id, session_id
 
-        standard_design_content = standard_template.render(**replacements_standard)
+def generate_fsf(config, fsf_template, output_directory, input_directory, task, custom_block, run_number, subject, session, space):
+    """Generates an FSF file based on the given parameters, looping over custom blocks."""
+    subject_design_output = os.path.join(
+        output_directory,
+        "fsl_feat_v6.0.7.4",
+        "subject_designs",
+        f"space-{space}",
+    )
+    os.makedirs(subject_design_output, exist_ok=True)
+    
+    # Extract subject and session from the config file path
+    subject_id, session_id = extract_subject_session_from_path(config)
+    block_dir = os.path.dirname(fsf_template)
 
-        os.makedirs(design_files_dir, exist_ok=True)
-        with open(standard_design_path, 'w') as f:
-            f.write(standard_design_content)
-        print(f"Generated standard design file: {standard_design_path}")
+    if not subject_id or not session_id:
+        print(f"Error: Could not extract subject and session from path: {config}")
+        return
 
-    if task.lower() != "rest":
-        for custom_config in custom_config_files:
-            custom_config_path = os.path.join(custom_config_dir, custom_config)
-            if not os.path.exists(custom_config_path):
-                print(f"Custom config file {custom_config_path} not found. Skipping.")
-                continue
+    # Parse configuration file parameters
+    config_params = parse_config_file(config)
 
-            custom_type = custom_config.replace('_config.txt', '')
-            custom_output_dir_name = generate_output_filename(sub, task, run, custom_type)
-            custom_output_directory = os.path.join(base_output_dir, sub, custom_output_dir_name)
-            custom_design_filename = f"{custom_output_dir_name}.fsf"
-            custom_design_path = os.path.join(design_files_dir, custom_design_filename)
+    # Construct common paths
+    structural_path = f"{output_directory}/freesurfer_synthstrip_v8.1.0/{subject_id}/{session_id}/anat/{subject_id}_{session_id}_T1w_synthstrip.nii.gz"
+    functional_path = f"{input_directory}/{subject_id}/{session_id}/func/{subject_id}_{session_id}_task-{task}_run-{run_number:02d}_bold.nii.gz"
+    func_reg_image = f"{output_directory}/freesurfer_synthstrip_v8.1.0/{subject_id}/{session_id}/func/{subject_id}_{session_id}_task-{task}_run-{run_number:02d}_bold_first_frame.nii.gz"
+    
+    # Check for confound file
+    confound_path = f"{output_directory}/fsl_motion-outliers_v6.0.7.4/{subject_id}/{session_id}/func/{subject_id}_{session_id}_task-{task}_run-{run_number:02d}_confounds.txt"
+    full_confound_path = check_file_exists(confound_path)
+    fmri_confoundevs = "1" if full_confound_path else "0"
 
-            if os.path.exists(custom_design_path):
-                print(f"Custom design file already exists, skipping: {custom_design_path}")
-                continue
+    # If no custom block is provided, default to "standard"
+    if not custom_block:
+        custom_block = ["standard"]
 
-            replacements_custom = {
-                "OUTPUT_DIRECTORY": custom_output_directory,
-                "TOTAL_REPETITION_TIME": total_repetition_time,
-                "TOTAL_FRAMES": total_frames,
-                "DISCARD_FRAMES": discard_frames,
-                "CRITICAL_Z": critical_z,
-                "SMOOTHING_KERNEL": smoothing_kernel,
-                "PROB_THRESHOLD": prob_threshold,
-                "Z_THRESHOLD": z_threshold,
-                "Z_MINIMUM": z_minimum,
-                "FULL_STRUCTURAL_PATH": t1w_path,
-                "FULL_FUNCTIONAL_PATH": bold_path,
-                "CUSTOM_DESIGN_FILE": custom_config_path,
-                "fmri_confoundevs": "1" if confound_exists else "0",
-                "FULL_CONFOUND_PATH": confound_file if confound_exists else "",
-                "FUNCTIONAL_TASK_NAME": task
-            }
+    # Loop over each custom block provided
+    for block in custom_block:
+        # Use the custom block name directly as the analysis subdirectory
+        analysis = block  
+        feat_directory = os.path.join(
+            output_directory,
+            "fsl_feat_v6.0.7.4",
+            analysis,
+            f"space-{space}",
+            subject,
+            session,
+            f"{subject}_{session}_task-{task}_run-{run_number:02d}"
+        )
 
-            custom_design_content = custom_template.render(**replacements_custom)
+        # Build the custom design file path (assumes a .txt file in the same directory as the fsf_template)
+        custom_design_file = os.path.join(block_dir, f"{block}.txt")
+        if not os.path.exists(custom_design_file):
+            print(f"Warning: Custom design file not found: {custom_design_file}")
+            custom_design_file_str = ""
+        else:
+            custom_design_file_str = custom_design_file
 
-            os.makedirs(design_files_dir, exist_ok=True)
-            with open(custom_design_path, 'w') as f:
-                f.write(custom_design_content)
-            print(f"Generated custom design file: {custom_design_path}")
+        # Load Jinja2 template
+        env = Environment(loader=FileSystemLoader(os.path.dirname(fsf_template)))
+        template = env.get_template(os.path.basename(fsf_template))
 
-def main(preprocessing_dir, design_files_dir, parameter_files_root, custom_config_dir, 
-         standard_template_path, custom_template_path, base_output_dir):
-    standard_template = load_template(standard_template_path)
-    custom_template = load_template(custom_template_path)
+        # Render template using the custom design file for this block
+        rendered_fsf = template.render(
+            OUTPUT_DIRECTORY=feat_directory,
+            FULL_STRUCTURAL_PATH=structural_path,
+            FULL_FUNCTIONAL_PATH=functional_path,
+            FUNC_REG_IMAGE=func_reg_image,
+            CUSTOM_DESIGN_FILE=custom_design_file_str,
+            fmri_confoundevs=fmri_confoundevs,
+            FULL_CONFOUND_PATH=full_confound_path,
+            FUNCTIONAL_TASK_NAME=task,
+            **config_params  # e.g., TOTAL_REPETITION_TIME, DISCARD_FRAMES, etc.
+        )
 
-    subject_dirs = glob.glob(os.path.join(preprocessing_dir, "sub-*"))
-    custom_config_files = ["alternating_config.txt", "inverted_config.txt", "split_config.txt", "staggered_config.txt"]
+        # Generate a unique output FSF filename; append the block name if not "standard"
+        output_fsf_filename = f"{subject_id}_{session_id}_task-{task}_run-{run_number:02d}"
+        if block != "standard":
+            output_fsf_filename += f"_{block}"
+        output_fsf_filename += ".fsf"
+        output_fsf_path = os.path.join(subject_design_output, output_fsf_filename)
 
+        with open(output_fsf_path, 'w') as fsf_file:
+            fsf_file.write(rendered_fsf)
+
+        print(f"FSF file generated: {output_fsf_path}")
+
+        # Run FEAT on the generated FSF file
+        try:
+            subprocess.run(["feat", output_fsf_path], check=True)
+            print(f"FEAT analysis started for {output_fsf_path}")
+        except subprocess.CalledProcessError as e:
+            print(f"Error running FEAT for {output_fsf_path}: {e}")
+
+
+def main(fsf_template, output_directory, input_directory, task, custom_block, subjects, runs, space="native"):
+    """Main function to generate FSF files for multiple subjects, sessions, and runs."""
+
+    # Get subject session directories
+    subject_dirs = parse_subjects(subjects, input_directory)
+    
+    # Iterate over subject/session directories
     for subject_dir in subject_dirs:
-        subject_id = os.path.basename(subject_dir)
-        parameter_dir = os.path.join(parameter_files_root, subject_id)
+        subject_id, session_id = extract_subject_session_from_path(subject_dir)
 
-        if not os.path.exists(parameter_dir):
-            print(f"Parameter directory {parameter_dir} does not exist. Skipping subject {subject_id}.")
-            continue
+        if subject_id and session_id:
+            for run_number in runs:
+                config_file = os.path.join(
+                    output_directory,
+                    f"fsl_feat_v6.0.7.4/configurations/{subject_id}/{session_id}",
+                    f"{subject_id}_{session_id}_task-{task}_run-{run_number:02d}_configuration.md"
+                )
 
-        session_dirs = glob.glob(os.path.join(subject_dir, "ses-*"))
-
-        for session_dir in session_dirs:
-            anat_dir = os.path.join(session_dir, "anat")
-            func_dir = os.path.join(session_dir, "func")
-
-            anat_pattern = f"{subject_id}_T1w_synthstrip.nii.gz"
-            anat_files = glob.glob(os.path.join(anat_dir, anat_pattern))
-            if not anat_files:
-                print(f"No anatomical file found in {anat_dir} for subject {subject_id}. Skipping session.")
-                continue
-            anat_file = anat_files[0]
-
-            func_pattern = f"{subject_id}_task-*_bold_run-*_synthstrip.nii.gz"
-            func_files = glob.glob(os.path.join(func_dir, func_pattern))
-            if not func_files:
-                print(f"No functional files found in {func_dir} for subject {subject_id}. Skipping session.")
-                continue
-
-            for func_file in func_files:
-                process_scan(subject_id, os.path.basename(session_dir), func_file, anat_file, 
-                             parameter_dir, standard_template, custom_template, 
-                             design_files_dir, base_output_dir, custom_config_dir, custom_config_files)
+                if os.path.exists(config_file):
+                    generate_fsf(
+                        config=config_file,
+                        fsf_template=fsf_template,
+                        output_directory=output_directory,
+                        input_directory=input_directory,
+                        task=task,
+                        custom_block=custom_block,
+                        run_number=run_number,
+                        subject=subject_id,
+                        session=session_id,
+                        space=space,
+                    )
+                else:
+                    print(f"Warning: Configuration file not found for {subject_id} {session_id} run-{run_number} at {config_file}")
+        else:
+            print(f"Skipping invalid directory: {subject_dir}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate FSL design files for fMRI analysis.")
-    parser.add_argument("--preprocessing_dir", required=True, help="Path to preprocessing directory.")
-    parser.add_argument("--design_files_dir", required=True, help="Path to design files output directory.")
-    parser.add_argument("--parameter_files_root", required=True, help="Path to parameter files root directory.")
-    parser.add_argument("--custom_config_dir", required=True, help="Path to custom configuration directory.")
-    parser.add_argument("--standard_template_path", required=True, help="Path to standard design template.")
-    parser.add_argument("--custom_template_path", required=True, help="Path to custom design template.")
-    parser.add_argument("--base_output_dir", required=True, help="Base output directory for FEAT analyses.")
+    parser = argparse.ArgumentParser(description="Generate FSF files from configuration.")
+    parser.add_argument("--fsf_template", required=True, help="Path to the .fsf template file.")
+    parser.add_argument("--output_directory", required=True, help="Output directory for generated files.")
+    parser.add_argument("--input_directory", required=True, help="Input directory containing functional files.")
+    parser.add_argument("--task", required=True, help="Task name (e.g., hand).")
+    parser.add_argument("--custom_block", nargs='*', default=[], help="Custom block inputs (optional).")
+    parser.add_argument("--subjects", required=False, help="Path to a subjects file or a comma-separated list of subjects.")
+    parser.add_argument("--run", nargs='+', type=int, required=True, help="Run numbers to process (e.g., --run 1 2).")
+    parser.add_argument("--space", default="native", help="Output space label for FEAT directories (default: native).")
+
     args = parser.parse_args()
 
-    main(args.preprocessing_dir, args.design_files_dir, args.parameter_files_root, 
-         args.custom_config_dir, args.standard_template_path, args.custom_template_path, 
-         args.base_output_dir)
+    main(
+        fsf_template=args.fsf_template,
+        output_directory=args.output_directory,
+        input_directory=args.input_directory,
+        task=args.task,
+        custom_block=args.custom_block,
+        subjects=args.subjects,
+        runs=args.run,
+        space=args.space,
+    )
