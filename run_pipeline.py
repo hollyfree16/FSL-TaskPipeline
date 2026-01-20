@@ -13,6 +13,32 @@ from utils.generate_design_files import main as generate_design_files_main
 from utils.generate_higher_level_feat_files import main as generate_higher_level_feat_files_main
 from utils.run_feat import main as run_feat_main
 
+
+def _parse_runs(run_args):
+    """Parse --run arguments.
+
+    Supports integer runs (e.g., 1 2) and the special token 'none' to indicate
+    that the BOLD filename does not contain a run label.
+
+    Returns a list where None indicates "no run label".
+    """
+    if not run_args:
+        raise ValueError("--run is required")
+
+    normalized = [str(r).strip().lower() for r in run_args]
+    if "none" in normalized:
+        if len(normalized) != 1:
+            raise ValueError("--run none cannot be combined with numeric runs")
+        return [None]
+
+    runs = []
+    for r in normalized:
+        try:
+            runs.append(int(r))
+        except ValueError as e:
+            raise ValueError(f"Invalid --run value: {r}") from e
+    return runs
+
 def get_total_memory_usage():
     """Get peak memory usage including child processes."""
     process = psutil.Process()
@@ -36,8 +62,16 @@ def main():
     parser.add_argument("--input_directory", required=True, help="Input BIDS directory.")
     parser.add_argument("--output_directory", required=True, help="Output directory.")
     parser.add_argument("--fsf_template", required=True, help="Path to the .fsf template file.")
-    parser.add_argument("--task", required=True, help="Task name (e.g., hand).")
-    parser.add_argument("--run", nargs='+', type=int, required=True, help="Run numbers to process (e.g., --run 1 2).")
+    parser.add_argument("--task", nargs='+', required=True, help="One or more task names (e.g., --task hand language).")
+    parser.add_argument(
+        "--run",
+        nargs='+',
+        required=True,
+        help=(
+            "Run numbers to process (e.g., --run 1 2). Use '--run none' when the BOLD filename does not "
+            "contain a run label (e.g., sub-XXX_ses-YYY_task-T_bold.nii.gz)."
+        ),
+    )
     parser.add_argument("--subjects", required=False, help="List of subjects to process. Can be passed directly as comma-separated values or a text file. Default will process entire directory.")
     parser.add_argument("--custom_block", nargs='*', default=[], help="Custom block inputs (optional).")
     parser.add_argument("--write_commands", required=False, help="Instead of running commands locally, write all commands to a text file for HPC execution.")
@@ -49,23 +83,31 @@ def main():
 
     args = parser.parse_args()
 
+    runs = _parse_runs(args.run)
+
     if args.track_resources:
         start_time = time.time()
         start_cpu_time = get_total_cpu_time()
 
     # Run pipeline steps
-    run_motion_outliers_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, args.run)
-    run_synthstrip_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, args.run)
-    extract_parameters_main(args.input_directory, args.output_directory, args.subjects, args.task, args.run)
-    first_level_fsfs = generate_design_files_main(
-        fsf_template=args.fsf_template,
-        output_directory=args.output_directory,
-        input_directory=args.input_directory,
-        task=args.task,
-        custom_block=args.custom_block,
-        subjects=args.subjects,
-        runs=args.run,
-    )
+    # Preprocessing steps should run once, even if multiple tasks are requested.
+    run_motion_outliers_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, runs)
+    run_synthstrip_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, runs)
+    extract_parameters_main(args.input_directory, args.output_directory, args.subjects, args.task, runs)
+
+    first_level_fsfs = []
+    for task in args.task:
+        first_level_fsfs.extend(
+            generate_design_files_main(
+                fsf_template=args.fsf_template,
+                output_directory=args.output_directory,
+                input_directory=args.input_directory,
+                task=task,
+                custom_block=args.custom_block,
+                subjects=args.subjects,
+                runs=runs,
+            )
+        )
 
     # Run FEAT or emit FEAT commands for first level.
     run_feat_main(
@@ -77,7 +119,9 @@ def main():
         analysis_blocks = args.custom_block if args.custom_block else ["standard"]
 
         # Pair whichever runs were passed. If more than two, pair the first two.
-        run_pair = tuple(args.run[:2]) if len(args.run) >= 2 else (1, 2)
+        # Higher-level analysis is only meaningful for numeric runs.
+        numeric_runs = [r for r in runs if r is not None]
+        run_pair = tuple(numeric_runs[:2]) if len(numeric_runs) >= 2 else None
 
         higher_level_fsfs_all = []
         for block in analysis_blocks:
@@ -98,13 +142,15 @@ def main():
                 "higher_level_outputs",
                 block,
             )
-            higher_level_fsfs = generate_higher_level_feat_files_main(
-                input_directory=first_level_root,
-                template_file=args.higher_level_fsf_template,
-                design_output_dir=higher_level_design_dir,
-                feat_output_dir=higher_level_output_dir,
-                run_pair=run_pair,
-            )
+            higher_level_fsfs = []
+            if run_pair is not None:
+                higher_level_fsfs = generate_higher_level_feat_files_main(
+                    input_directory=first_level_root,
+                    template_file=args.higher_level_fsf_template,
+                    design_output_dir=higher_level_design_dir,
+                    feat_output_dir=higher_level_output_dir,
+                    run_pair=run_pair,
+                )
 
             if higher_level_fsfs:
                 higher_level_fsfs_all.extend(higher_level_fsfs)

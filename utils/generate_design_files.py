@@ -1,7 +1,7 @@
 import argparse
 import os
 import glob
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -81,10 +81,20 @@ def generate_fsf(
     input_directory: str,
     task: str,
     custom_block: List[str],
-    run_number: int,
+    run_number: Optional[int],
     subject: str,
     session: str,
 ) -> List[str]:
+    def _bold_basename(sub: str, ses: str, t: str, r: Optional[int]) -> str:
+        if r is None:
+            return f"{sub}_{ses}_task-{t}_bold.nii.gz"
+        return f"{sub}_{ses}_task-{t}_run-{r:02d}_bold.nii.gz"
+
+    def _scan_stem(sub: str, ses: str, t: str, r: Optional[int]) -> str:
+        if r is None:
+            return f"{sub}_{ses}_task-{t}"
+        return f"{sub}_{ses}_task-{t}_run-{r:02d}"
+
     """Generate one or more FSF files (standard + optional custom blocks).
 
     Returns a list of paths to generated FSF files.
@@ -111,18 +121,29 @@ def generate_fsf(
         f"{output_directory}/freesurfer_synthstrip_v8.1.0/{subject_id}/{session_id}/anat/"
         f"{subject_id}_{session_id}_T1w_synthstrip.nii.gz"
     )
-    functional_path = (
-        f"{input_directory}/{subject_id}/{session_id}/func/"
-        f"{subject_id}_{session_id}_task-{task}_run-{run_number:02d}_bold.nii.gz"
+    functional_path = os.path.join(
+        input_directory,
+        subject_id,
+        session_id,
+        "func",
+        _bold_basename(subject_id, session_id, task, run_number),
     )
-    func_reg_image = (
-        f"{output_directory}/freesurfer_synthstrip_v8.1.0/{subject_id}/{session_id}/func/"
-        f"{subject_id}_{session_id}_task-{task}_run-{run_number:02d}_bold_first_frame.nii.gz"
+    func_reg_image = os.path.join(
+        output_directory,
+        "freesurfer_synthstrip_v8.1.0",
+        subject_id,
+        session_id,
+        "func",
+        _bold_basename(subject_id, session_id, task, run_number).replace("_bold.nii.gz", "_bold_first_frame.nii.gz"),
     )
 
-    confound_path = (
-        f"{output_directory}/fsl_motion-outliers_v6.0.7.4/{subject_id}/{session_id}/func/"
-        f"{subject_id}_{session_id}_task-{task}_run-{run_number:02d}_confounds.txt"
+    confound_path = os.path.join(
+        output_directory,
+        "fsl_motion-outliers_v6.0.7.4",
+        subject_id,
+        session_id,
+        "func",
+        f"{_scan_stem(subject_id, session_id, task, run_number)}_confounds.txt",
     )
     full_confound_path = check_file_exists(confound_path)
     fmri_confoundevs = "1" if full_confound_path else "0"
@@ -138,7 +159,7 @@ def generate_fsf(
             analysis,
             subject,
             session,
-            f"{subject}_{session}_task-{task}_run-{run_number:02d}",
+            _scan_stem(subject, session, task, run_number),
         )
 
         custom_design_file = os.path.join(block_dir, f"{block}.txt")
@@ -163,7 +184,7 @@ def generate_fsf(
             **config_params,
         )
 
-        output_fsf_filename = f"{subject_id}_{session_id}_task-{task}_run-{run_number:02d}"
+        output_fsf_filename = _scan_stem(subject_id, session_id, task, run_number)
         if block != "standard":
             output_fsf_filename += f"_{block}"
         output_fsf_filename += ".fsf"
@@ -186,7 +207,7 @@ def main(
     task: str,
     custom_block: List[str],
     subjects: Optional[str],
-    runs: List[int],
+    runs: List[Optional[int]],
 ) -> List[str]:
     """Generate FSF files for multiple subjects, sessions, and runs.
 
@@ -201,10 +222,18 @@ def main(
 
         if subject_id and session_id:
             for run_number in runs:
+                if run_number is None:
+                    config_name = f"{subject_id}_{session_id}_task-{task}_configuration.md"
+                else:
+                    config_name = f"{subject_id}_{session_id}_task-{task}_run-{run_number:02d}_configuration.md"
+
                 config_file = os.path.join(
                     output_directory,
-                    f"fsl_feat_v6.0.7.4/configurations/{subject_id}/{session_id}",
-                    f"{subject_id}_{session_id}_task-{task}_run-{run_number:02d}_configuration.md",
+                    "fsl_feat_v6.0.7.4",
+                    "configurations",
+                    subject_id,
+                    session_id,
+                    config_name,
                 )
 
                 if os.path.exists(config_file):
@@ -244,9 +273,24 @@ if __name__ == "__main__":
         required=False,
         help="Path to a subjects file or a comma-separated list of subjects.",
     )
-    parser.add_argument("--run", nargs='+', type=int, required=True, help="Run numbers to process (e.g., --run 1 2).")
+    parser.add_argument(
+        "--run",
+        nargs='+',
+        required=True,
+        help=(
+            "Run numbers to process (e.g., --run 1 2). Use '--run none' when the BOLD filename does not contain a run label."
+        ),
+    )
 
     args = parser.parse_args()
+
+    normalized = [str(r).strip().lower() for r in args.run]
+    if "none" in normalized:
+        if len(normalized) != 1:
+            raise SystemExit("--run none cannot be combined with numeric runs")
+        runs = [None]
+    else:
+        runs = [int(r) for r in normalized]
 
     main(
         fsf_template=args.fsf_template,
@@ -255,5 +299,5 @@ if __name__ == "__main__":
         task=args.task,
         custom_block=args.custom_block,
         subjects=args.subjects,
-        runs=args.run,
+        runs=runs,
     )

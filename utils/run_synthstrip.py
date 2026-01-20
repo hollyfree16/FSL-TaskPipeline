@@ -112,8 +112,18 @@ def gather_nifti_files(input_dir, subjects=None, task_filters=None, run_filters=
             return True
         if task_filters and not any(f"task-{t}" in basename for t in task_filters):
             return False
-        if run_filters and not any(f"run-{int(r):02d}" in basename for r in run_filters):
-            return False
+        if run_filters:
+            want_no_run = any(r is None for r in run_filters)
+            want_numeric = [r for r in run_filters if r is not None]
+
+            has_run_token = "run-" in basename
+            matches = False
+            if want_no_run and (not has_run_token):
+                matches = True
+            if want_numeric and any(f"run-{int(r):02d}" in basename for r in want_numeric):
+                matches = True
+            if not matches:
+                return False
         return True
 
     if subjects:
@@ -171,9 +181,31 @@ if __name__ == "__main__":
     parser.add_argument("--max_workers", type=int, default=8, help="Maximum number of parallel workers.")
     parser.add_argument("--task", nargs='+', help=("Optional: Filter files by task substring. For example, passing '--task hand language rest' "
                                                     "will process only files containing 'task-hand', 'task-language', or 'task-rest'."))
-    parser.add_argument("--run", nargs='+', type=int, help=("Optional: Filter files by run number. For example, passing '--run 1 2' "
-                                                           "will process only files containing 'run-01' or 'run-02'."))
+    parser.add_argument(
+        "--run",
+        nargs='+',
+        help=(
+            "Optional: Filter files by run number. For example, passing '--run 1 2' "
+            "will process only files containing 'run-01' or 'run-02'. Use '--run none' to match files with no run label."
+        ),
+    )
     args = parser.parse_args()
 
-    main(args.input_directory, args.output_directory, args.subjects, args.max_workers,
-         task_filters=args.task, run_filters=args.run)
+    run_filters = None
+    if args.run:
+        normalized = [str(r).strip().lower() for r in args.run]
+        if "none" in normalized:
+            if len(normalized) != 1:
+                raise SystemExit("--run none cannot be combined with numeric runs")
+            run_filters = [None]
+        else:
+            run_filters = [int(r) for r in normalized]
+
+    main(
+        args.input_directory,
+        args.output_directory,
+        args.subjects,
+        args.max_workers,
+        task_filters=args.task,
+        run_filters=run_filters,
+    )

@@ -95,3 +95,38 @@ def test_non_nifti_files(mock_file_structure):
     )
     assert os.path.exists(config_dir)
     assert len(os.listdir(config_dir)) == 1  # Only the valid .nii.gz file's config exists
+
+
+def test_run_none_filters_only_no_run_files(tmp_path):
+    base_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    os.makedirs(base_dir / "sub-001" / "ses-001" / "func", exist_ok=True)
+
+    # Create both a run-labeled and a no-run file.
+    (base_dir / "sub-001" / "ses-001" / "func" / "sub-001_ses-001_task-rest_run-01_bold.nii.gz").write_text("dummy")
+    (base_dir / "sub-001" / "ses-001" / "func" / "sub-001_ses-001_task-rest_bold.nii.gz").write_text("dummy")
+
+    mock_nifti = MagicMock()
+    mock_nifti.header.get_zooms.return_value = (2.0, 2.0, 2.0, 2.5)
+    mock_nifti.shape = (64, 64, 33, 200)
+
+    with patch.object(extract_parameters.nib, "load", return_value=mock_nifti):
+        extract_parameters.extract_and_write_scan_info(
+            str(base_dir),
+            str(output_dir),
+            subjects_filter=None,
+            task_filters=["rest"],
+            run_filters=[None],
+        )
+
+    config_dir = os.path.join(
+        str(output_dir),
+        "fsl_feat_v6.0.7.4",
+        "configurations",
+        "sub-001",
+        "ses-001",
+    )
+
+    # Should only create the no-run config.
+    assert os.path.exists(os.path.join(config_dir, "sub-001_ses-001_task-rest_configuration.md"))
+    assert not os.path.exists(os.path.join(config_dir, "sub-001_ses-001_task-rest_run-01_configuration.md"))

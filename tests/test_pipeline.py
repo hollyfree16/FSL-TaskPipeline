@@ -37,7 +37,7 @@ def test_run_pipeline_main(tmp_path):
                 str(tmp_path / "output"),
                 None,
                 10,
-                "hand",
+                ["hand"],
                 [1, 2],
             )
             mock_synthstrip.assert_called_once_with(
@@ -45,14 +45,14 @@ def test_run_pipeline_main(tmp_path):
                 str(tmp_path / "output"),
                 None,
                 10,
-                "hand",
+                ["hand"],
                 [1, 2],
             )
             mock_extract_parameters.assert_called_once_with(
                 str(tmp_path / "input"),
                 str(tmp_path / "output"),
                 None,
-                "hand",
+                ["hand"],
                 [1, 2],
             )
             mock_generate_design_files.assert_called_once_with(
