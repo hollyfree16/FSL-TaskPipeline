@@ -3,18 +3,44 @@ import json
 
 def load_config():
     """
-    Load the JSON configuration file for motion outlier settings.
-    The file is expected at configuration_templates/motion_outlier_settings.json
-    relative to the project root (one level above the utils folder).
+    Load dummy-scan rules used to compute DISCARD_FRAMES.
+
+    Preferred path:
+      configuration_templates/dummy_scan_settings.json
+
+    Backward-compatible fallback:
+      configuration_templates/motion_outlier_settings.json
+      (if it contains dummy_scan_rules/default_dummy)
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "..", "configuration_templates", "motion_outlier_settings.json")
-    if not os.path.exists(config_path):
-        print(f"Configuration file not found: {config_path}. Using default settings.")
-        return {"dummy_scan_rules": [], "default_dummy": 2}
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-    return config
+    template_dir = os.path.join(script_dir, "..", "configuration_templates")
+
+    preferred = os.path.join(template_dir, "dummy_scan_settings.json")
+    legacy = os.path.join(template_dir, "motion_outlier_settings.json")
+
+    default_cfg = {"dummy_scan_rules": [], "default_dummy": 2}
+
+    if os.path.exists(preferred):
+        with open(preferred, "r") as f:
+            cfg = json.load(f)
+        # Ensure required keys exist.
+        cfg.setdefault("dummy_scan_rules", [])
+        cfg.setdefault("default_dummy", 2)
+        return cfg
+
+    if os.path.exists(legacy):
+        with open(legacy, "r") as f:
+            cfg = json.load(f)
+        # Some legacy configs are motion-outlier-only; only use dummy keys if present.
+        if "dummy_scan_rules" in cfg or "default_dummy" in cfg:
+            cfg.setdefault("dummy_scan_rules", [])
+            cfg.setdefault("default_dummy", 2)
+            return cfg
+
+    print(
+        f"Dummy scan configuration not found. Looked for: {preferred} and {legacy}. Using defaults."
+    )
+    return default_cfg
 
 def get_dummy_scans(num_frames, config):
     """

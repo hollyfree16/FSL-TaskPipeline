@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
 
 import os
-import nibabel as nib
 import argparse
+
+# nibabel is required for reading NIfTI headers (TR, frame count). We keep this
+# import resilient so tests (and lightweight tooling) can monkeypatch `nib.load`
+# even in environments where nibabel is not installed.
+try:
+    import nibabel as nib  # type: ignore
+except ModuleNotFoundError:
+    class _NibabelStub:
+        def load(self, *_args, **_kwargs):
+            raise ModuleNotFoundError(
+                "nibabel is required to read NIfTI headers for TR and frame count. "
+                "Install with: pip install nibabel"
+            )
+
+    nib = _NibabelStub()  # type: ignore
 from .find_dummy import load_config, get_dummy_scans
 
 def parse_subjects(subjects_input):
@@ -42,7 +56,7 @@ def extract_and_write_scan_info(base_dir, output_dir, subjects_filter=None, task
         if not os.path.isdir(subject_path):
             continue
 
-        sessions = os.listdir(subject_path)
+        sessions = sorted(os.listdir(subject_path))
         for session in sessions:
             session_path = os.path.join(subject_path, session)
             print(session_path)
@@ -53,7 +67,7 @@ def extract_and_write_scan_info(base_dir, output_dir, subjects_filter=None, task
             if not os.path.exists(func_path):
                 continue
 
-            for file in os.listdir(func_path):
+            for file in sorted(os.listdir(func_path)):
                 # Apply task filtering if provided.
                 if task_filters:
                     if not any(f"task-{t}" in file for t in task_filters):

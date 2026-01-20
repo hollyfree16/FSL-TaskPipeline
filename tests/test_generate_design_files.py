@@ -1,5 +1,4 @@
 import os
-from unittest.mock import patch
 
 from utils import generate_design_files
 
@@ -43,8 +42,7 @@ def test_main_generates_fsf(tmp_path):
     write_config(config_path)
     write_template(template_path)
 
-    with patch("utils.generate_design_files.subprocess.run") as mock_run:
-        generate_design_files.main(
+    generated = generate_design_files.main(
             fsf_template=str(template_path),
             output_directory=str(output_dir),
             input_directory=str(input_dir),
@@ -52,12 +50,11 @@ def test_main_generates_fsf(tmp_path):
             custom_block=[],
             subjects=None,
             runs=[1],
-            space="native",
         )
 
-        output_fsf = output_dir / "fsl_feat_v6.0.7.4" / "subject_designs" / "space-native" / "sub-001_ses-001_task-hand_run-01.fsf"
-        assert output_fsf.exists()
-        mock_run.assert_called_once_with(["feat", str(output_fsf)], check=True)
+    output_fsf = output_dir / "fsl_feat_v6.0.7.4" / "subject_designs" / "sub-001_ses-001_task-hand_run-01.fsf"
+    assert output_fsf.exists()
+    assert str(output_fsf) in generated
 
 
 def test_main_skips_missing_config(tmp_path):
@@ -69,8 +66,7 @@ def test_main_skips_missing_config(tmp_path):
     (input_dir / "sub-001" / "ses-001" / "func" / "sub-001_ses-001_task-hand_run-01_bold.nii.gz").write_text("dummy")
     write_template(template_path)
 
-    with patch("utils.generate_design_files.subprocess.run") as mock_run:
-        generate_design_files.main(
+    generated = generate_design_files.main(
             fsf_template=str(template_path),
             output_directory=str(output_dir),
             input_directory=str(input_dir),
@@ -78,6 +74,5 @@ def test_main_skips_missing_config(tmp_path):
             custom_block=[],
             subjects=None,
             runs=[1],
-            space="native",
         )
-        mock_run.assert_not_called()
+    assert generated == []

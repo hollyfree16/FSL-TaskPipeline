@@ -5,7 +5,11 @@ import glob
 import subprocess
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-import nibabel as nib  # For loading NIfTI images
+
+try:
+    import nibabel as nib  # type: ignore
+except ImportError:  # pragma: no cover
+    nib = None
 from functools import partial
 from .find_dummy import load_config, get_dummy_scans
 
@@ -21,6 +25,9 @@ def process_file(input_path, output_path, config):
 
     # Determine number of frames in the bold sequence
     try:
+        if nib is None:
+            raise ImportError("nibabel not installed")
+
         img = nib.load(input_path)
         if len(img.shape) < 4:
             print(f"File {input_path} does not have 4 dimensions, cannot determine number of frames. Using default dummy scans.")

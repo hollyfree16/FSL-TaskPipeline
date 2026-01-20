@@ -11,6 +11,7 @@ from utils.run_synthstrip import main as run_synthstrip_main
 from utils.extract_parameters import main as extract_parameters_main
 from utils.generate_design_files import main as generate_design_files_main
 from utils.generate_higher_level_feat_files import main as generate_higher_level_feat_files_main
+from utils.run_feat import main as run_feat_main
 
 def get_total_memory_usage():
     """Get peak memory usage including child processes."""
@@ -41,8 +42,6 @@ def main():
     parser.add_argument("--custom_block", nargs='*', default=[], help="Custom block inputs (optional).")
     parser.add_argument("--write_commands", required=False, help="Instead of running commands locally, write all commands to a text file for HPC execution.")
     parser.add_argument("--max_workers", type=int, default=10, help="Maximum number of parallel workers.")
-    parser.add_argument("--first_level_space", default="native", help="Space label for first-level FEAT outputs.")
-    parser.add_argument("--higher_level_space", default="mni", help="Space label for higher-level FEAT outputs.")
     parser.add_argument("--higher_level_fsf_template", required=False, help="Path to the higher-level .fsf template file.")
 
     # New flag to track resources
@@ -58,7 +57,7 @@ def main():
     run_motion_outliers_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, args.run)
     run_synthstrip_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, args.run)
     extract_parameters_main(args.input_directory, args.output_directory, args.subjects, args.task, args.run)
-    generate_design_files_main(
+    first_level_fsfs = generate_design_files_main(
         fsf_template=args.fsf_template,
         output_directory=args.output_directory,
         input_directory=args.input_directory,
@@ -66,38 +65,56 @@ def main():
         custom_block=args.custom_block,
         subjects=args.subjects,
         runs=args.run,
-        space=args.first_level_space,
+    )
+
+    # Run FEAT or emit FEAT commands for first level.
+    run_feat_main(
+        first_level_fsfs,
+        max_workers=args.max_workers,
+        write_commands=args.write_commands,
     )
     if args.higher_level_fsf_template:
         analysis_blocks = args.custom_block if args.custom_block else ["standard"]
+
+        # Pair whichever runs were passed. If more than two, pair the first two.
+        run_pair = tuple(args.run[:2]) if len(args.run) >= 2 else (1, 2)
+
+        higher_level_fsfs_all = []
         for block in analysis_blocks:
             first_level_root = os.path.join(
                 args.output_directory,
                 "fsl_feat_v6.0.7.4",
                 block,
-                f"space-{args.first_level_space}",
             )
             higher_level_design_dir = os.path.join(
                 args.output_directory,
                 "fsl_feat_v6.0.7.4",
                 "higher_level_designs",
                 block,
-                f"space-{args.higher_level_space}",
             )
             higher_level_output_dir = os.path.join(
                 args.output_directory,
                 "fsl_feat_v6.0.7.4",
                 "higher_level_outputs",
                 block,
-                f"space-{args.higher_level_space}",
             )
-            generate_higher_level_feat_files_main(
+            higher_level_fsfs = generate_higher_level_feat_files_main(
                 input_directory=first_level_root,
                 template_file=args.higher_level_fsf_template,
                 design_output_dir=higher_level_design_dir,
                 feat_output_dir=higher_level_output_dir,
-                run_pair=(1, 2),
+                run_pair=run_pair,
             )
+
+            if higher_level_fsfs:
+                higher_level_fsfs_all.extend(higher_level_fsfs)
+
+        # Run FEAT or emit FEAT commands for higher level.
+        run_feat_main(
+            higher_level_fsfs_all,
+            max_workers=args.max_workers,
+            write_commands=args.write_commands,
+        )
 
     if args.track_resources:
         end_time = time.time()

@@ -27,7 +27,7 @@ def test_extract_and_write_scan_info(mock_file_structure):
     mock_nifti.header.get_zooms.return_value = (2.0, 2.0, 2.0, 2.5)  # Dummy TR
     mock_nifti.shape = (64, 64, 33, 200)  # Dummy shape with 200 frames
 
-    with patch("nibabel.load", return_value=mock_nifti):
+    with patch.object(extract_parameters.nib, "load", return_value=mock_nifti):
         extract_parameters.extract_and_write_scan_info(base_dir, output_dir)
 
     # Check that configuration files are created correctly
@@ -72,7 +72,7 @@ def test_skip_existing_configuration(mock_file_structure):
     with open(existing_config, "w") as f:
         f.write("Existing content")
 
-    with patch("nibabel.load") as mock_load:
+    with patch.object(extract_parameters.nib, "load") as mock_load:
         extract_parameters.extract_and_write_scan_info(base_dir, output_dir)
 
     # Ensure the existing configuration file was not overwritten
@@ -86,7 +86,7 @@ def test_non_nifti_files(mock_file_structure):
     with open(non_nifti_file, "w") as f:
         f.write("dummy data")
 
-    with patch("nibabel.load") as mock_load:
+    with patch.object(extract_parameters.nib, "load") as mock_load:
         extract_parameters.extract_and_write_scan_info(base_dir, output_dir)
 
     # Ensure non-NIfTI file was ignored and no additional configurations were created

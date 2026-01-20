@@ -98,15 +98,20 @@ def write_fsf(output_fsf, rendered_content):
 
 
 def main(input_directory, template_file, design_output_dir, feat_output_dir, run_pair=(1, 2)):
+    """Generate higher-level FSF files.
+
+    Returns a list of generated FSF paths (existing FSFs are not included).
+    """
+    generated_fsfs = []
     entries = collect_feat_dirs(input_directory)
     if not entries:
         logging.info("No FEAT directories found. Exiting.")
-        return
+        return generated_fsfs
 
     pairs = pair_runs(entries, run_pair)
     if not pairs:
         logging.info("No run pairs found to process. Exiting.")
-        return
+        return generated_fsfs
 
     for pair in pairs:
         output_base = (
@@ -132,6 +137,9 @@ def main(input_directory, template_file, design_output_dir, feat_output_dir, run
         )
         write_fsf(output_fsf, rendered_content)
         logging.info("Generated higher-level FSF: %s", output_fsf)
+        generated_fsfs.append(output_fsf)
+
+    return generated_fsfs
 
 
 if __name__ == "__main__":

@@ -8,7 +8,13 @@ import logging
 import shutil
 import sys
 import argparse
-import nibabel as nib  # For loading NIfTI images and extracting the first frame
+try:
+    import nibabel as nib  # type: ignore
+except ImportError:  # pragma: no cover
+    # Provide a minimal stub so unit tests can monkeypatch nib.load/save.
+    from types import SimpleNamespace
+
+    nib = SimpleNamespace(load=None, save=None, Nifti1Image=None)
 
 # Configure logging
 logging.basicConfig(
