@@ -12,14 +12,16 @@ except ImportError:  # pragma: no cover
     nib = None
 from functools import partial
 from .find_dummy import load_config, get_dummy_scans
+from .bids import parse_bids_entities, match_filters
+from .command import run_cmd
 
-def process_file(input_path, output_path, config):
+def process_file(input_path, output_path, config, *, log_file=None, dry_run=False, force=False):
     """
     Process a single NIfTI file: determine the number of frames,
     update the fsl_motion_outliers command with the appropriate --dummy value,
     and run the command.
     """
-    if os.path.exists(output_path):
+    if os.path.exists(output_path) and not force:
         print(f"Output file already exists, skipping: {output_path}")
         return
 
@@ -45,14 +47,33 @@ def process_file(input_path, output_path, config):
         dummy_scans = config.get("default_dummy", 2)
 
     # Update command template with computed dummy_scans value
-    command = f"fsl_motion_outliers -i {input_path} -o {output_path} --dummy={dummy_scans} -v --dvars"
-    print(f"Running: {command}")
+    cmd = [
+        "fsl_motion_outliers",
+        "-i",
+        input_path,
+        "-o",
+        output_path,
+        f"--dummy={dummy_scans}",
+        "-v",
+        "--dvars",
+    ]
     try:
-        subprocess.run(command, shell=True, check=True)
+        run_cmd(cmd, log_file=log_file, dry_run=dry_run, check=True)
     except subprocess.CalledProcessError as e:
-        print(f"Error processing file: {input_path}\n{e}")
+        raise RuntimeError(f"fsl_motion_outliers failed for {input_path}: {e}") from e
 
-def main(input_base_dir, output_base_dir, subjects, max_workers=10, task_filters=None, run_filters=None):
+def main(
+    input_base_dir,
+    output_base_dir,
+    subjects,
+    max_workers=10,
+    task_filters=None,
+    run_filters=None,
+    *,
+    log_file=None,
+    dry_run=False,
+    force=False,
+):
     tasks = []
     
     # Load configuration settings for motion outlier detection.
@@ -60,16 +81,21 @@ def main(input_base_dir, output_base_dir, subjects, max_workers=10, task_filters
     
     # Determine which subject directories to process:
     if subjects:
+        # Accept list/tuple input (e.g., from run_pipeline's nargs='+').
+        if isinstance(subjects, (list, tuple, set)):
+            subjects_list = [str(s).strip() for s in subjects if str(s).strip()]
+        else:
+            subjects_list = None
         # If subjects is a file, read its contents; otherwise assume comma-separated list.
-        if os.path.exists(subjects) and os.path.isfile(subjects):
+        if subjects_list is None and os.path.exists(subjects) and os.path.isfile(subjects):
             with open(subjects, 'r') as f:
                 content = f.read().strip()
             if ',' in content:
                 subjects_list = [s.strip() for s in content.split(',') if s.strip()]
             else:
                 subjects_list = [line.strip() for line in content.splitlines() if line.strip()]
-        else:
-            subjects_list = [s.strip() for s in subjects.split(',') if s.strip()]
+        elif subjects_list is None:
+            subjects_list = [s.strip() for s in str(subjects).split(',') if s.strip()]
         subject_dirs = [os.path.join(input_base_dir, sub) for sub in subjects_list]
     else:
         subject_dirs = sorted(glob.glob(os.path.join(input_base_dir, "sub-*")))
@@ -85,24 +111,9 @@ def main(input_base_dir, output_base_dir, subjects, max_workers=10, task_filters
             if "func" in root:
                 for file in files:
                     if file.endswith(".nii.gz") and "bold" in file:
-                        # Apply task filtering if provided.
-                        if task_filters:
-                            if not any(f"task-{t}" in file for t in task_filters):
-                                continue
-                        # Apply run filtering if provided.
-                        if run_filters:
-                            want_no_run = any(r is None for r in run_filters)
-                            want_numeric = [r for r in run_filters if r is not None]
-
-                            has_run_token = "run-" in file
-                            matches = False
-                            if want_no_run and (not has_run_token):
-                                matches = True
-                            if want_numeric and any(f"run-{int(r):02d}" in file for r in want_numeric):
-                                matches = True
-
-                            if not matches:
-                                continue
+                        ents = parse_bids_entities(file)
+                        if not match_filters(ents, task_filters=task_filters, run_filters=run_filters):
+                            continue
                         input_path = os.path.join(root, file)
                         # Compute the relative path from the input_base_dir.
                         relative_path = os.path.relpath(root, input_base_dir)
@@ -119,7 +130,7 @@ def main(input_base_dir, output_base_dir, subjects, max_workers=10, task_filters
     
     # Process files in parallel, passing the configuration to each worker.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        func = partial(process_file, config=config)
+        func = partial(process_file, config=config, log_file=log_file, dry_run=dry_run, force=force)
         executor.map(lambda task: func(*task), tasks)
     
     print("Motion outlier detection complete!")

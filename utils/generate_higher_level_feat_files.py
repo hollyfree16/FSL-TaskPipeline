@@ -26,7 +26,17 @@ def parse_feat_dir_name(directory_name):
     }
 
 
-def collect_feat_dirs(input_directory):
+def _normalize_subjects(subjects):
+    if not subjects:
+        return None
+    if isinstance(subjects, str):
+        # allow comma-separated
+        subs=[s.strip() for s in subjects.split(',') if s.strip()]
+        return set(subs) if subs else None
+    return set(subjects)
+
+
+def collect_feat_dirs(input_directory, *, subjects=None, task_filters=None):
     entries = []
     if not os.path.isdir(input_directory):
         logging.warning("Input directory not found: %s", input_directory)
@@ -36,6 +46,11 @@ def collect_feat_dirs(input_directory):
         for directory in dirs:
             info = parse_feat_dir_name(directory)
             if not info:
+                continue
+            subject_set = _normalize_subjects(subjects)
+            if subject_set is not None and info.get('subject') not in subject_set:
+                continue
+            if task_filters and info.get('task') not in set(task_filters):
                 continue
             entries.append(
                 {
@@ -97,13 +112,13 @@ def write_fsf(output_fsf, rendered_content):
         output.write(rendered_content)
 
 
-def main(input_directory, template_file, design_output_dir, feat_output_dir, run_pair=(1, 2)):
+def main(input_directory, template_file, design_output_dir, feat_output_dir, run_pair=(1, 2), *, subjects=None, task_filters=None):
     """Generate higher-level FSF files.
 
     Returns a list of generated FSF paths (existing FSFs are not included).
     """
     generated_fsfs = []
-    entries = collect_feat_dirs(input_directory)
+    entries = collect_feat_dirs(input_directory, subjects=subjects, task_filters=task_filters)
     if not entries:
         logging.info("No FEAT directories found. Exiting.")
         return generated_fsfs
@@ -151,6 +166,8 @@ if __name__ == "__main__":
     parser.add_argument("--design_output_dir", required=True, help="Output directory for higher-level FSF files.")
     parser.add_argument("--feat_output_dir", required=True, help="Output directory for higher-level FEAT outputs.")
     parser.add_argument("--run_pair", nargs=2, type=int, default=[1, 2], help="Run numbers to pair (default: 1 2).")
+    parser.add_argument("--subjects", nargs="+", required=False, help="Optional subject IDs to include (space- or comma-separated).")
+    parser.add_argument("--task", nargs="+", required=False, help="Optional task names to include.")
     args = parser.parse_args()
 
     main(
@@ -159,4 +176,6 @@ if __name__ == "__main__":
         design_output_dir=args.design_output_dir,
         feat_output_dir=args.feat_output_dir,
         run_pair=tuple(args.run_pair),
+        subjects=args.subjects,
+        task_filters=args.task,
     )

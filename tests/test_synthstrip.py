@@ -25,9 +25,8 @@ def test_check_dependencies():
         mock_which.assert_called_once_with("mri_synthstrip")
 
     with patch("shutil.which", return_value=None):
-        with patch("sys.exit") as mock_exit:
+        with pytest.raises(RuntimeError):
             run_synthstrip.check_dependencies()
-            mock_exit.assert_called_once_with(1)
 
 # Test the process_file function
 def test_process_file(mock_file_structure):
@@ -43,18 +42,17 @@ def test_process_file(mock_file_structure):
     )
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-    with patch("utils.run_synthstrip.subprocess.run") as mock_run, \
+    with patch("utils.command.subprocess.run") as mock_run, \
          patch("utils.run_synthstrip.nib.load") as mock_load:
         mock_img = MagicMock()
         mock_img.shape = (64, 64, 33)
         mock_load.return_value = mock_img
         mock_run.return_value = MagicMock()
         run_synthstrip.process_file(input_file, input_dir, output_dir)
-        mock_run.assert_called_once_with(
-            f'mri_synthstrip -i "{input_file}" -o "{output_file}"',
-            shell=True,
-            check=True,
-        )
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == ["mri_synthstrip", "-i", input_file, "-o", output_file]
+        assert kwargs.get("check") is True
 
 # Test the gather_nifti_files function
 def test_gather_nifti_files(mock_file_structure):
@@ -93,6 +91,28 @@ def test_skip_existing_output(mock_file_structure):
     with open(output_file, "w") as f:
         f.write("existing output")
 
-    with patch("utils.run_synthstrip.subprocess.run") as mock_run:
+    with patch("utils.command.subprocess.run") as mock_run:
         run_synthstrip.process_file(input_file, input_dir, output_dir)
         mock_run.assert_not_called()  # Should skip since the output exists
+
+
+def test_synthstrip_deduplicates_same_output(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    os.makedirs(input_dir / "sub-001" / "ses-001" / "anat", exist_ok=True)
+    t1 = input_dir / "sub-001" / "ses-001" / "anat" / "sub-001_ses-001_T1w.nii.gz"
+    t1.write_text("dummy")
+
+    # Force gather_nifti_files to return the same file twice (this can happen if upstream callers
+    # accidentally include it multiple times when multiple tasks are specified).
+    with patch("utils.run_synthstrip.check_dependencies"),          patch("utils.run_synthstrip.gather_nifti_files", return_value=[str(t1), str(t1)]),          patch("utils.run_synthstrip.nib.load") as mock_load,          patch("utils.command.subprocess.run") as mock_run:
+
+        # Mock nibabel load to look 3D
+        mock_img = MagicMock()
+        mock_img.shape = (10, 10, 10)
+        mock_load.return_value = mock_img
+
+        run_synthstrip.main(str(input_dir), str(output_dir), subjects=["sub-001"], max_workers=2, task_filters=["hand"], run_filters=[1])
+
+        # Only one synthstrip invocation should occur for the intended output path.
+        assert mock_run.call_count == 1

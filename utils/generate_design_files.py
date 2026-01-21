@@ -20,7 +20,7 @@ def parse_config_file(config_path):
 def check_file_exists(path_pattern):
     """Checks if a file matching the given pattern exists."""
     files = glob.glob(path_pattern)
-    return files[0] if files else ""
+    return files[0] if files else None
 
 
 def parse_subjects(subjects, input_base_dir):
@@ -28,15 +28,17 @@ def parse_subjects(subjects, input_base_dir):
     subject_dirs = []
 
     if subjects:
-        if os.path.exists(subjects) and os.path.isfile(subjects):
+        if isinstance(subjects, (list, tuple, set)):
+            subjects_list = [str(s).strip() for s in subjects if str(s).strip()]
+        elif os.path.exists(subjects) and os.path.isfile(subjects):
             with open(subjects, 'r') as f:
                 content = f.read().strip()
             if ',' in content:
                 subjects_list = [s.strip() for s in content.split(',') if s.strip()]
             else:
                 subjects_list = [line.strip() for line in content.splitlines() if line.strip()]
-        else:
-            subjects_list = [s.strip() for s in subjects.split(',') if s.strip()]
+        elif not isinstance(subjects, (list, tuple, set)):
+            subjects_list = [s.strip() for s in str(subjects).split(',') if s.strip()]
 
         # Find session directories inside each subject directory
         for sub in subjects_list:
@@ -58,18 +60,10 @@ def parse_subjects(subjects, input_base_dir):
 
 def extract_subject_session_from_path(path):
     """Extracts the subject ID and session ID from a given path."""
-    if os.path.isdir(path):
-        subject_id = os.path.basename(os.path.dirname(path))
-        session_id = os.path.basename(path)
-    else:
-        parts = os.path.dirname(path).split(os.sep)
-        subject_id = None
-        session_id = None
-        for part in parts:
-            if part.startswith("sub-"):
-                subject_id = part
-            elif part.startswith("ses-"):
-                session_id = part
+    # Robustly search the full path for BIDS-like entities.
+    parts = os.path.normpath(str(path)).split(os.sep)
+    subject_id = next((p for p in parts if p.startswith("sub-")), None)
+    session_id = next((p for p in parts if p.startswith("ses-")), None)
     return subject_id, session_id
 
 

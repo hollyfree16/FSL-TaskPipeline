@@ -30,14 +30,23 @@ def test_process_file(mock_file_structure):
     )
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-    with patch("utils.run_motion_outliers.subprocess.run") as mock_run:
+    # run_cmd delegates to utils.command.subprocess.run
+    with patch("utils.command.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock()
         run_motion_outliers.process_file(input_file, output_file, {"dummy_scan_rules": [], "default_dummy": 2})
-        mock_run.assert_called_once_with(
-            f"fsl_motion_outliers -i {input_file} -o {output_file} --dummy=2 -v --dvars",
-            shell=True,
-            check=True,
-        )
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == [
+            "fsl_motion_outliers",
+            "-i",
+            input_file,
+            "-o",
+            output_file,
+            "--dummy=2",
+            "-v",
+            "--dvars",
+        ]
+        assert kwargs.get("check") is True
 
 def test_main(mock_file_structure):
     input_dir, output_dir = mock_file_structure
@@ -63,6 +72,6 @@ def test_skip_existing_output(mock_file_structure):
     with open(output_file, "w") as f:
         f.write("existing output")
 
-    with patch("utils.run_motion_outliers.subprocess.run") as mock_run:
+    with patch("utils.command.subprocess.run") as mock_run:
         run_motion_outliers.process_file(input_file, output_file, {"dummy_scan_rules": [], "default_dummy": 2})
         mock_run.assert_not_called()  # Should skip since the output exists

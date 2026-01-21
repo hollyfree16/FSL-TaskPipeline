@@ -18,6 +18,7 @@ except ModuleNotFoundError:
 
     nib = _NibabelStub()  # type: ignore
 from .find_dummy import load_config, get_dummy_scans
+from .bids import parse_bids_entities, match_filters
 
 def parse_subjects(subjects_input):
     """
@@ -25,6 +26,8 @@ def parse_subjects(subjects_input):
     If subjects_input is a path to a file, read its contents and split by commas or newlines.
     Otherwise, treat it as a comma-separated list.
     """
+    if isinstance(subjects_input, (list, tuple, set)):
+        return [str(s).strip() for s in subjects_input if str(s).strip()]
     if os.path.exists(subjects_input) and os.path.isfile(subjects_input):
         with open(subjects_input, 'r') as f:
             content = f.read().strip()
@@ -68,23 +71,9 @@ def extract_and_write_scan_info(base_dir, output_dir, subjects_filter=None, task
                 continue
 
             for file in sorted(os.listdir(func_path)):
-                # Apply task filtering if provided.
-                if task_filters:
-                    if not any(f"task-{t}" in file for t in task_filters):
-                        continue
-                # Apply run filtering if provided.
-                if run_filters:
-                    want_no_run = any(r is None for r in run_filters)
-                    want_numeric = [r for r in run_filters if r is not None]
-
-                    has_run_token = "run-" in file
-                    matches = False
-                    if want_no_run and (not has_run_token):
-                        matches = True
-                    if want_numeric and any(f"run-{int(r):02d}" in file for r in want_numeric):
-                        matches = True
-                    if not matches:
-                        continue
+                ents = parse_bids_entities(file)
+                if not match_filters(ents, task_filters=task_filters, run_filters=run_filters):
+                    continue
 
                 print(func_path, file)
                 if file.endswith("_bold.nii.gz"):

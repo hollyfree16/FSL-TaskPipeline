@@ -8,6 +8,9 @@ import logging
 import shutil
 import sys
 import argparse
+# Local helpers
+from .bids import parse_bids_entities, match_filters
+from .command import run_cmd
 try:
     import nibabel as nib  # type: ignore
 except ImportError:  # pragma: no cover
@@ -24,7 +27,8 @@ logging.basicConfig(
 )
 
 # Command template for mri_synthstrip
-command_template = 'mri_synthstrip -i "{in_path}" -o "{out_path}"'
+def _synthstrip_cmd(in_path: str, out_path: str) -> list[str]:
+    return ["mri_synthstrip", "-i", in_path, "-o", out_path]
 
 def parse_subjects(subjects_input):
     """
@@ -32,6 +36,8 @@ def parse_subjects(subjects_input):
     If subjects_input is a path to a file, read its contents and split by commas or newlines.
     Otherwise, treat it as a comma-separated list.
     """
+    if isinstance(subjects_input, (list, tuple, set)):
+        return [str(s).strip() for s in subjects_input if str(s).strip()]
     if os.path.exists(subjects_input) and os.path.isfile(subjects_input):
         with open(subjects_input, 'r') as f:
             content = f.read().strip()
@@ -45,10 +51,9 @@ def parse_subjects(subjects_input):
 
 def check_dependencies():
     if not shutil.which("mri_synthstrip"):
-        logging.error("Error: mri_synthstrip is not installed or not found in PATH.")
-        sys.exit(1)
+        raise RuntimeError("mri_synthstrip is not installed or not found in PATH.")
 
-def process_file(file_path, input_base_dir, output_base_dir):
+def process_file(file_path, input_base_dir, output_base_dir, *, log_file=None, dry_run=False, force=False):
     try:
         if not file_path.endswith(".nii.gz"):
             logging.warning(f"Skipping non-NIfTI file: {file_path}")
@@ -63,7 +68,7 @@ def process_file(file_path, input_base_dir, output_base_dir):
         output_file = f"{base_name}_synthstrip.nii.gz"
         output_path = os.path.join(output_dir, output_file)
 
-        if os.path.exists(output_path):
+        if os.path.exists(output_path) and not force:
             logging.info(f"Output file already exists, skipping: {output_path}")
             return
 
@@ -83,13 +88,12 @@ def process_file(file_path, input_base_dir, output_base_dir):
             in_path = file_path
 
         # Format and run the synthstrip command.
-        command = command_template.format(in_path=in_path, out_path=output_path)
-        logging.info(f"Running: {command}")
-        subprocess.run(command, shell=True, check=True)
+        cmd = _synthstrip_cmd(in_path, output_path)
+        run_cmd(cmd, log_file=log_file, dry_run=dry_run, check=True)
         logging.info(f"Completed: {output_path}")
 
     except subprocess.CalledProcessError as e:
-        logging.error(f"Error processing file: {file_path}\n{e}")
+        raise RuntimeError(f"mri_synthstrip failed for {file_path}: {e}") from e
     except Exception as e:
         logging.error(f"Unexpected error with file: {file_path}\n{e}")
 
@@ -110,21 +114,8 @@ def gather_nifti_files(input_dir, subjects=None, task_filters=None, run_filters=
         # Always include anatomical T1w images.
         if "anat" in parts and "T1w" in basename:
             return True
-        if task_filters and not any(f"task-{t}" in basename for t in task_filters):
-            return False
-        if run_filters:
-            want_no_run = any(r is None for r in run_filters)
-            want_numeric = [r for r in run_filters if r is not None]
-
-            has_run_token = "run-" in basename
-            matches = False
-            if want_no_run and (not has_run_token):
-                matches = True
-            if want_numeric and any(f"run-{int(r):02d}" in basename for r in want_numeric):
-                matches = True
-            if not matches:
-                return False
-        return True
+        ents = parse_bids_entities(basename)
+        return match_filters(ents, task_filters=task_filters, run_filters=run_filters)
 
     if subjects:
         # subjects is expected to be a list of subject identifiers, e.g., ["sub-001", "sub-002"]
@@ -143,7 +134,18 @@ def gather_nifti_files(input_dir, subjects=None, task_filters=None, run_filters=
         files = [f for f in all_files if file_matches_filters(f)]
     return sorted(files)
 
-def main(input_base_dir, output_base_dir, subjects, max_workers=8, task_filters=None, run_filters=None):
+def main(
+    input_base_dir,
+    output_base_dir,
+    subjects,
+    max_workers=8,
+    task_filters=None,
+    run_filters=None,
+    *,
+    log_file=None,
+    dry_run=False,
+    force=False,
+):
     check_dependencies()
     
     # Parse subjects if provided.
@@ -155,13 +157,35 @@ def main(input_base_dir, output_base_dir, subjects, max_workers=8, task_filters=
     files_to_process = gather_nifti_files(input_base_dir, subjects_list, task_filters, run_filters)
     logging.info(f"Found {len(files_to_process)} NIfTI files to process.")
 
+
+    # De-duplicate by intended output path so the same T1w (or any file) is never processed twice
+    # even if it appears multiple times in the gathered file list.
+    unique = {}
+    for fp in files_to_process:
+        relative_dir = os.path.relpath(os.path.dirname(fp), input_base_dir)
+        output_dir = os.path.join(output_base_dir, "freesurfer_synthstrip_v8.1.0", relative_dir)
+        base_name = os.path.basename(fp)[:-7]
+        out_fp = os.path.join(output_dir, f"{base_name}_synthstrip.nii.gz")
+        unique.setdefault(out_fp, fp)
+    files_to_process = list(unique.values())
+    logging.info(f"After de-duplication: {len(files_to_process)} NIfTI files to process.")
+
+
     if not files_to_process:
         logging.info("No NIfTI files found. Exiting.")
         return
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(process_file, fp, input_base_dir, output_base_dir): fp
+            executor.submit(
+                process_file,
+                fp,
+                input_base_dir,
+                output_base_dir,
+                log_file=log_file,
+                dry_run=dry_run,
+                force=force,
+            ): fp
             for fp in files_to_process
         }
         for future in concurrent.futures.as_completed(futures):

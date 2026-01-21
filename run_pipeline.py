@@ -5,6 +5,7 @@ import time
 import resource  # Unix-specific; consider psutil for Windows compatibility
 import psutil  # To track child processes
 import os
+import re
 
 from utils.run_motion_outliers import main as run_motion_outliers_main
 from utils.run_synthstrip import main as run_synthstrip_main
@@ -12,6 +13,7 @@ from utils.extract_parameters import main as extract_parameters_main
 from utils.generate_design_files import main as generate_design_files_main
 from utils.generate_higher_level_feat_files import main as generate_higher_level_feat_files_main
 from utils.run_feat import main as run_feat_main
+from utils.command import append_log
 
 
 def _parse_runs(run_args):
@@ -55,6 +57,33 @@ def get_total_cpu_time():
         cpu_time += child.cpu_times().user + child.cpu_times().system
     return cpu_time
 
+def _normalize_subjects(subjects_arg, input_directory):
+    """Normalize --subjects.
+
+    Returns None to indicate 'all subjects'. Otherwise returns a list of subject IDs.
+    Accepts: None, a list of strings from argparse, a single comma-separated string, or a path to a text file.
+    """
+    if not subjects_arg:
+        return None
+    # argparse with nargs='+' returns a list; accept also a single string.
+    if isinstance(subjects_arg, str):
+        tokens = [subjects_arg]
+    else:
+        tokens = list(subjects_arg)
+    # If a single token is a file path, read it.
+    if len(tokens) == 1 and os.path.exists(tokens[0]) and os.path.isfile(tokens[0]):
+        with open(tokens[0], 'r') as f:
+            content = f.read().strip()
+        raw = re.split(r'[\n,]+', content)
+        subs = [s.strip() for s in raw if s.strip()]
+        return subs or None
+    # Otherwise split each token on commas.
+    subs = []
+    for t in tokens:
+        subs.extend([s.strip() for s in t.split(',') if s.strip()])
+    return subs or None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Wrapper script to run all FSL Task Pipeline steps.")
 
@@ -72,11 +101,13 @@ def main():
             "contain a run label (e.g., sub-XXX_ses-YYY_task-T_bold.nii.gz)."
         ),
     )
-    parser.add_argument("--subjects", required=False, help="List of subjects to process. Can be passed directly as comma-separated values or a text file. Default will process entire directory.")
+    parser.add_argument("--subjects", nargs="+", required=False, help=("One or more subject IDs (e.g., sub-001 sub-002) OR a path to a text file containing subjects (comma/newline-separated). If omitted, process all subjects found in the input directory."))
     parser.add_argument("--custom_block", nargs='*', default=[], help="Custom block inputs (optional).")
     parser.add_argument("--write_commands", required=False, help="Instead of running commands locally, write all commands to a text file for HPC execution.")
     parser.add_argument("--max_workers", type=int, default=10, help="Maximum number of parallel workers.")
     parser.add_argument("--higher_level_fsf_template", required=False, help="Path to the higher-level .fsf template file.")
+    parser.add_argument("--dry_run", action="store_true", help="Print/log commands but do not execute external tools")
+    parser.add_argument("--force", action="store_true", help="Re-run steps even if outputs already exist")
 
     # New flag to track resources
     parser.add_argument("--track_resources", action="store_true", help="Track system resources and runtime usage.")
@@ -85,83 +116,131 @@ def main():
 
     runs = _parse_runs(args.run)
 
+    subjects_list = _normalize_subjects(args.subjects, args.input_directory)
+
+    # Determine subjects to process.
+    if subjects_list is not None:
+        subject_iter = subjects_list
+    else:
+        # Default: process every subject directory under input_directory.
+        subject_iter = sorted(
+            [d for d in os.listdir(args.input_directory) if d.startswith("sub-") and os.path.isdir(os.path.join(args.input_directory, d))]
+        )
+
+
     if args.track_resources:
         start_time = time.time()
         start_cpu_time = get_total_cpu_time()
 
     # Run pipeline steps
     # Preprocessing steps should run once, even if multiple tasks are requested.
-    run_motion_outliers_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, runs)
-    run_synthstrip_main(args.input_directory, args.output_directory, args.subjects, args.max_workers, args.task, runs)
-    extract_parameters_main(args.input_directory, args.output_directory, args.subjects, args.task, runs)
 
-    first_level_fsfs = []
-    for task in args.task:
-        first_level_fsfs.extend(
-            generate_design_files_main(
-                fsf_template=args.fsf_template,
-                output_directory=args.output_directory,
-                input_directory=args.input_directory,
-                task=task,
-                custom_block=args.custom_block,
-                subjects=args.subjects,
-                runs=runs,
-            )
+    for subject in subject_iter:
+        subject_arg = subject
+        log_file = os.path.join(args.output_directory, "logs", subject_arg, "pipeline.log")
+        append_log(log_file, f"=== Begin subject {subject_arg} ===")
+        # Preprocessing runs once per subject (not once per task).
+        run_motion_outliers_main(
+            args.input_directory,
+            args.output_directory,
+            subject_arg,
+            args.max_workers,
+            args.task,
+            runs,
+            log_file=log_file,
+            dry_run=args.dry_run,
+            force=args.force,
         )
-
-    # Run FEAT or emit FEAT commands for first level.
-    run_feat_main(
-        first_level_fsfs,
-        max_workers=args.max_workers,
-        write_commands=args.write_commands,
-    )
-    if args.higher_level_fsf_template:
-        analysis_blocks = args.custom_block if args.custom_block else ["standard"]
-
-        # Pair whichever runs were passed. If more than two, pair the first two.
-        # Higher-level analysis is only meaningful for numeric runs.
-        numeric_runs = [r for r in runs if r is not None]
-        run_pair = tuple(numeric_runs[:2]) if len(numeric_runs) >= 2 else None
-
-        higher_level_fsfs_all = []
-        for block in analysis_blocks:
-            first_level_root = os.path.join(
-                args.output_directory,
-                "fsl_feat_v6.0.7.4",
-                block,
-            )
-            higher_level_design_dir = os.path.join(
-                args.output_directory,
-                "fsl_feat_v6.0.7.4",
-                "higher_level_designs",
-                block,
-            )
-            higher_level_output_dir = os.path.join(
-                args.output_directory,
-                "fsl_feat_v6.0.7.4",
-                "higher_level_outputs",
-                block,
-            )
-            higher_level_fsfs = []
-            if run_pair is not None:
-                higher_level_fsfs = generate_higher_level_feat_files_main(
-                    input_directory=first_level_root,
-                    template_file=args.higher_level_fsf_template,
-                    design_output_dir=higher_level_design_dir,
-                    feat_output_dir=higher_level_output_dir,
-                    run_pair=run_pair,
+        run_synthstrip_main(
+            args.input_directory,
+            args.output_directory,
+            subject_arg,
+            args.max_workers,
+            args.task,
+            runs,
+            log_file=log_file,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+        extract_parameters_main(args.input_directory, args.output_directory, subject_arg, args.task, runs)
+    
+        first_level_fsfs = []
+        for task in args.task:
+            first_level_fsfs.extend(
+                generate_design_files_main(
+                    fsf_template=args.fsf_template,
+                    output_directory=args.output_directory,
+                    input_directory=args.input_directory,
+                    task=task,
+                    custom_block=args.custom_block,
+                    subjects=subject_arg,
+                    runs=runs,
                 )
-
-            if higher_level_fsfs:
-                higher_level_fsfs_all.extend(higher_level_fsfs)
-
-        # Run FEAT or emit FEAT commands for higher level.
+            )
+    
+        # Run FEAT or emit FEAT commands for first level.
         run_feat_main(
-            higher_level_fsfs_all,
+            first_level_fsfs,
             max_workers=args.max_workers,
             write_commands=args.write_commands,
+            log_file=log_file,
+            dry_run=args.dry_run,
+            force=args.force,
         )
+        if args.higher_level_fsf_template:
+            analysis_blocks = args.custom_block if args.custom_block else ["standard"]
+    
+            # Pair whichever runs were passed. If more than two, pair the first two.
+            # Higher-level analysis is only meaningful for numeric runs.
+            numeric_runs = [r for r in runs if r is not None]
+            run_pair = tuple(numeric_runs[:2]) if len(numeric_runs) >= 2 else None
+    
+            higher_level_fsfs_all = []
+            for block in analysis_blocks:
+                first_level_root = os.path.join(
+                    args.output_directory,
+                    "fsl_feat_v6.0.7.4",
+                    block,
+                )
+                higher_level_design_dir = os.path.join(
+                    args.output_directory,
+                    "fsl_feat_v6.0.7.4",
+                    "higher_level_designs",
+                    block,
+                )
+                higher_level_output_dir = os.path.join(
+                    args.output_directory,
+                    "fsl_feat_v6.0.7.4",
+                    "higher_level_outputs",
+                    block,
+                )
+                higher_level_fsfs = []
+                if run_pair is not None:
+                    higher_level_fsfs = generate_higher_level_feat_files_main(
+                        input_directory=first_level_root,
+                        template_file=args.higher_level_fsf_template,
+                        design_output_dir=higher_level_design_dir,
+                        feat_output_dir=higher_level_output_dir,
+                        run_pair=run_pair,
+                        subjects=subject_arg,
+                        task_filters=args.task,
+                    )
+    
+                if higher_level_fsfs:
+                    higher_level_fsfs_all.extend(higher_level_fsfs)
+    
+            # Run FEAT or emit FEAT commands for higher level.
+            run_feat_main(
+                higher_level_fsfs_all,
+                max_workers=args.max_workers,
+                write_commands=args.write_commands,
+                log_file=log_file,
+                dry_run=args.dry_run,
+                force=args.force,
+            )
 
+        append_log(log_file, f"=== End subject {subject_arg} ===")
+    
     if args.track_resources:
         end_time = time.time()
         end_cpu_time = get_total_cpu_time()
