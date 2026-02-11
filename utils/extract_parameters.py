@@ -19,27 +19,10 @@ except ModuleNotFoundError:
     nib = _NibabelStub()  # type: ignore
 from .find_dummy import load_config, get_dummy_scans
 from .bids import parse_bids_entities, match_filters
-
-def parse_subjects(subjects_input):
-    """
-    Parse the subjects input.
-    If subjects_input is a path to a file, read its contents and split by commas or newlines.
-    Otherwise, treat it as a comma-separated list.
-    """
-    if isinstance(subjects_input, (list, tuple, set)):
-        return [str(s).strip() for s in subjects_input if str(s).strip()]
-    if os.path.exists(subjects_input) and os.path.isfile(subjects_input):
-        with open(subjects_input, 'r') as f:
-            content = f.read().strip()
-        if ',' in content:
-            subjects_list = [s.strip() for s in content.split(',') if s.strip()]
-        else:
-            subjects_list = [line.strip() for line in content.splitlines() if line.strip()]
-    else:
-        subjects_list = [s.strip() for s in subjects_input.split(',') if s.strip()]
-    return subjects_list
+from .subjects import parse_subjects_arg
 
 def extract_and_write_scan_info(base_dir, output_dir, subjects_filter=None, task_filters=None, run_filters=None):
+    errors = []
     # Load configuration once at the start
     config = load_config()
     
@@ -62,7 +45,6 @@ def extract_and_write_scan_info(base_dir, output_dir, subjects_filter=None, task
         sessions = sorted(os.listdir(subject_path))
         for session in sessions:
             session_path = os.path.join(subject_path, session)
-            print(session_path)
             if not os.path.isdir(session_path):
                 continue
 
@@ -75,7 +57,6 @@ def extract_and_write_scan_info(base_dir, output_dir, subjects_filter=None, task
                 if not match_filters(ents, task_filters=task_filters, run_filters=run_filters):
                     continue
 
-                print(func_path, file)
                 if file.endswith("_bold.nii.gz"):
                     file_path = os.path.join(func_path, file)
                     scan_name = file.replace("_bold.nii.gz", "")
@@ -124,9 +105,13 @@ def extract_and_write_scan_info(base_dir, output_dir, subjects_filter=None, task
                         print(f"Configuration written to: {config_filepath}")
                     except Exception as e:
                         print(f"Error processing file {file_path}: {e}")
+                        errors.append((file_path, str(e)))
+
+    if errors:
+        raise RuntimeError(f"Failed processing {len(errors)} functional file(s)")
 
 def main(base_dir, output_dir, subjects_input=None, task_filters=None, run_filters=None):
-    subjects_filter = parse_subjects(subjects_input) if subjects_input else None
+    subjects_filter = parse_subjects_arg(subjects_input)
     extract_and_write_scan_info(base_dir, output_dir, subjects_filter, task_filters, run_filters)
 
 if __name__ == "__main__":
