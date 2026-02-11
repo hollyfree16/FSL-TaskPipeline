@@ -21,6 +21,17 @@ def append_log(log_file: Optional[Union[str, Path]], line: str) -> None:
         f.write(f"[{ts}] {line.rstrip()}\n")
 
 
+def create_instance_log_file(output_directory: Union[str, Path], *, prefix: str = "pipeline") -> str:
+    """Create a unique log file path for this pipeline invocation."""
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f"{prefix}_{ts}_{os.getpid()}.log"
+    log_file = Path(output_directory) / "logs" / file_name
+    ensure_parent_dir(log_file)
+    log_file.touch(exist_ok=True)
+    return str(log_file)
+
+
 def run_cmd(
     cmd: Sequence[str],
     *,

@@ -12,7 +12,7 @@ from utils.extract_parameters import main as extract_parameters_main
 from utils.generate_design_files import main as generate_design_files_main
 from utils.generate_higher_level_feat_files import main as generate_higher_level_feat_files_main
 from utils.run_feat import main as run_feat_main
-from utils.command import append_log
+from utils.command import append_log, create_instance_log_file
 from utils.subjects import parse_subjects_arg
 
 
@@ -108,10 +108,12 @@ def main():
     # Run pipeline steps
     # Preprocessing steps should run once, even if multiple tasks are requested.
 
+    run_log_file = create_instance_log_file(args.output_directory)
+    append_log(run_log_file, "=== Begin pipeline run ===")
+
     for subject in subject_iter:
         subject_arg = subject
-        log_file = os.path.join(args.output_directory, "logs", subject_arg, "pipeline.log")
-        append_log(log_file, f"=== Begin subject {subject_arg} ===")
+        append_log(run_log_file, f"=== Begin subject {subject_arg} ===")
         # Preprocessing runs once per subject (not once per task).
         run_motion_outliers_main(
             args.input_directory,
@@ -120,7 +122,7 @@ def main():
             args.max_workers,
             args.task,
             runs,
-            log_file=log_file,
+            log_file=run_log_file,
             dry_run=args.dry_run,
             force=args.force,
         )
@@ -131,7 +133,7 @@ def main():
             args.max_workers,
             args.task,
             runs,
-            log_file=log_file,
+            log_file=run_log_file,
             dry_run=args.dry_run,
             force=args.force,
         )
@@ -156,7 +158,7 @@ def main():
             first_level_fsfs,
             max_workers=args.max_workers,
             write_commands=args.write_commands,
-            log_file=log_file,
+            log_file=run_log_file,
             dry_run=args.dry_run,
             force=args.force,
         )
@@ -207,13 +209,15 @@ def main():
                 higher_level_fsfs_all,
                 max_workers=args.max_workers,
                 write_commands=args.write_commands,
-                log_file=log_file,
+                log_file=run_log_file,
                 dry_run=args.dry_run,
                 force=args.force,
             )
 
-        append_log(log_file, f"=== End subject {subject_arg} ===")
+        append_log(run_log_file, f"=== End subject {subject_arg} ===")
     
+    append_log(run_log_file, "=== End pipeline run ===")
+
     if args.track_resources:
         end_time = time.time()
         end_cpu_time = get_total_cpu_time()
@@ -231,6 +235,7 @@ def main():
         print(f"Maximum resident set size (main process): {usage.ru_maxrss / 1024:.2f} MB")  # Convert KB to MB
         print("--------------------------------")
 
+    print(f"Run log saved to: {run_log_file}")
     print("All pipeline steps completed successfully!")
 
 if __name__ == "__main__":
