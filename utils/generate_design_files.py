@@ -1,9 +1,11 @@
 import argparse
 import os
 import glob
-from typing import List, Optional, Union
+from typing import List, Optional
 
 from jinja2 import Environment, FileSystemLoader
+
+from .subjects import parse_subjects_arg
 
 
 def parse_config_file(config_path):
@@ -12,7 +14,7 @@ def parse_config_file(config_path):
     with open(config_path, 'r') as file:
         for line in file:
             if '=' in line:
-                key, value = line.strip().split('=')
+                key, value = line.strip().split('=', 1)
                 params[key.strip()] = value.strip()
     return params
 
@@ -24,23 +26,11 @@ def check_file_exists(path_pattern):
 
 
 def parse_subjects(subjects, input_base_dir):
-    """Parses subjects from a file or comma-separated list, or finds all 'sub-*/ses-*' directories."""
+    """Resolve subject/session directories from subject arguments."""
     subject_dirs = []
 
-    if subjects:
-        if isinstance(subjects, (list, tuple, set)):
-            subjects_list = [str(s).strip() for s in subjects if str(s).strip()]
-        elif os.path.exists(subjects) and os.path.isfile(subjects):
-            with open(subjects, 'r') as f:
-                content = f.read().strip()
-            if ',' in content:
-                subjects_list = [s.strip() for s in content.split(',') if s.strip()]
-            else:
-                subjects_list = [line.strip() for line in content.splitlines() if line.strip()]
-        elif not isinstance(subjects, (list, tuple, set)):
-            subjects_list = [s.strip() for s in str(subjects).split(',') if s.strip()]
-
-        # Find session directories inside each subject directory
+    subjects_list = parse_subjects_arg(subjects)
+    if subjects_list:
         for sub in subjects_list:
             subject_path = os.path.join(input_base_dir, sub)
             if os.path.exists(subject_path) and os.path.isdir(subject_path):
@@ -51,7 +41,6 @@ def parse_subjects(subjects, input_base_dir):
                     print(f"Warning: No session directories found in {subject_path}")
             else:
                 print(f"Warning: Subject directory not found: {subject_path}")
-
     else:
         subject_dirs = sorted(glob.glob(os.path.join(input_base_dir, "sub-*", "ses-*")))
 

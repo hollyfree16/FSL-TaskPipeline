@@ -130,3 +130,11 @@ def test_run_none_filters_only_no_run_files(tmp_path):
     # Should only create the no-run config.
     assert os.path.exists(os.path.join(config_dir, "sub-001_ses-001_task-rest_configuration.md"))
     assert not os.path.exists(os.path.join(config_dir, "sub-001_ses-001_task-rest_run-01_configuration.md"))
+
+
+def test_extract_and_write_scan_info_raises_when_file_fails(mock_file_structure):
+    base_dir, output_dir = mock_file_structure
+
+    with patch.object(extract_parameters.nib, "load", side_effect=RuntimeError("bad nifti")):
+        with pytest.raises(RuntimeError, match="Failed processing"):
+            extract_parameters.extract_and_write_scan_info(base_dir, output_dir)

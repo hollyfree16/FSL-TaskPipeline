@@ -76,3 +76,13 @@ def test_main_skips_missing_config(tmp_path):
             runs=[1],
         )
     assert generated == []
+
+
+def test_parse_config_file_supports_equals_in_value(tmp_path):
+    config_path = tmp_path / "cfg.md"
+    config_path.write_text("A = simple\nB = value=with=equals\n")
+
+    parsed = generate_design_files.parse_config_file(str(config_path))
+
+    assert parsed["A"] == "simple"
+    assert parsed["B"] == "value=with=equals"

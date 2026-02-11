@@ -4,7 +4,7 @@ import os
 import glob
 import subprocess
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import nibabel as nib  # type: ignore
@@ -14,6 +14,7 @@ from functools import partial
 from .find_dummy import load_config, get_dummy_scans
 from .bids import parse_bids_entities, match_filters
 from .command import run_cmd
+from .subjects import parse_subjects_arg
 
 def process_file(input_path, output_path, config, *, log_file=None, dry_run=False, force=False):
     """
@@ -80,22 +81,8 @@ def main(
     config = load_config()
     
     # Determine which subject directories to process:
-    if subjects:
-        # Accept list/tuple input (e.g., from run_pipeline's nargs='+').
-        if isinstance(subjects, (list, tuple, set)):
-            subjects_list = [str(s).strip() for s in subjects if str(s).strip()]
-        else:
-            subjects_list = None
-        # If subjects is a file, read its contents; otherwise assume comma-separated list.
-        if subjects_list is None and os.path.exists(subjects) and os.path.isfile(subjects):
-            with open(subjects, 'r') as f:
-                content = f.read().strip()
-            if ',' in content:
-                subjects_list = [s.strip() for s in content.split(',') if s.strip()]
-            else:
-                subjects_list = [line.strip() for line in content.splitlines() if line.strip()]
-        elif subjects_list is None:
-            subjects_list = [s.strip() for s in str(subjects).split(',') if s.strip()]
+    subjects_list = parse_subjects_arg(subjects)
+    if subjects_list:
         subject_dirs = [os.path.join(input_base_dir, sub) for sub in subjects_list]
     else:
         subject_dirs = sorted(glob.glob(os.path.join(input_base_dir, "sub-*")))
@@ -131,7 +118,9 @@ def main(
     # Process files in parallel, passing the configuration to each worker.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         func = partial(process_file, config=config, log_file=log_file, dry_run=dry_run, force=force)
-        executor.map(lambda task: func(*task), tasks)
+        futures = [executor.submit(func, *task) for task in tasks]
+        for future in as_completed(futures):
+            future.result()
     
     print("Motion outlier detection complete!")
 

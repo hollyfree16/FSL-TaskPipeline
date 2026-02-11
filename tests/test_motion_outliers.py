@@ -75,3 +75,11 @@ def test_skip_existing_output(mock_file_structure):
     with patch("utils.command.subprocess.run") as mock_run:
         run_motion_outliers.process_file(input_file, output_file, {"dummy_scan_rules": [], "default_dummy": 2})
         mock_run.assert_not_called()  # Should skip since the output exists
+
+
+def test_main_propagates_worker_exceptions(mock_file_structure):
+    input_dir, output_dir = mock_file_structure
+
+    with patch("utils.run_motion_outliers.process_file", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError, match="boom"):
+            run_motion_outliers.main(input_dir, output_dir, None, max_workers=2)

@@ -5,7 +5,6 @@ import time
 import resource  # Unix-specific; consider psutil for Windows compatibility
 import psutil  # To track child processes
 import os
-import re
 
 from utils.run_motion_outliers import main as run_motion_outliers_main
 from utils.run_synthstrip import main as run_synthstrip_main
@@ -14,6 +13,7 @@ from utils.generate_design_files import main as generate_design_files_main
 from utils.generate_higher_level_feat_files import main as generate_higher_level_feat_files_main
 from utils.run_feat import main as run_feat_main
 from utils.command import append_log
+from utils.subjects import parse_subjects_arg
 
 
 def _parse_runs(run_args):
@@ -57,33 +57,6 @@ def get_total_cpu_time():
         cpu_time += child.cpu_times().user + child.cpu_times().system
     return cpu_time
 
-def _normalize_subjects(subjects_arg, input_directory):
-    """Normalize --subjects.
-
-    Returns None to indicate 'all subjects'. Otherwise returns a list of subject IDs.
-    Accepts: None, a list of strings from argparse, a single comma-separated string, or a path to a text file.
-    """
-    if not subjects_arg:
-        return None
-    # argparse with nargs='+' returns a list; accept also a single string.
-    if isinstance(subjects_arg, str):
-        tokens = [subjects_arg]
-    else:
-        tokens = list(subjects_arg)
-    # If a single token is a file path, read it.
-    if len(tokens) == 1 and os.path.exists(tokens[0]) and os.path.isfile(tokens[0]):
-        with open(tokens[0], 'r') as f:
-            content = f.read().strip()
-        raw = re.split(r'[\n,]+', content)
-        subs = [s.strip() for s in raw if s.strip()]
-        return subs or None
-    # Otherwise split each token on commas.
-    subs = []
-    for t in tokens:
-        subs.extend([s.strip() for s in t.split(',') if s.strip()])
-    return subs or None
-
-
 def main():
     parser = argparse.ArgumentParser(description="Wrapper script to run all FSL Task Pipeline steps.")
 
@@ -116,7 +89,7 @@ def main():
 
     runs = _parse_runs(args.run)
 
-    subjects_list = _normalize_subjects(args.subjects, args.input_directory)
+    subjects_list = parse_subjects_arg(args.subjects)
 
     # Determine subjects to process.
     if subjects_list is not None:
