@@ -63,6 +63,48 @@ def test_run_pipeline_multiple_subjects_multiple_tasks(tmp_path):
         assert mock_higher.call_count == 2
 
 
+def test_run_pipeline_creates_instance_log_file(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+
+    mock_args = [
+        "run_pipeline.py",
+        "--input_directory", str(input_dir),
+        "--output_directory", str(output_dir),
+        "--fsf_template", "configuration_templates/standard_design_template.fsf",
+        "--task", "hand",
+        "--run", "1",
+        "--subjects", "sub-001",
+    ]
+
+    with patch.object(sys, "argv", mock_args), \
+         patch("run_pipeline.run_motion_outliers_main") as mock_motion, \
+         patch("run_pipeline.run_synthstrip_main") as mock_synthstrip, \
+         patch("run_pipeline.extract_parameters_main"), \
+         patch("run_pipeline.generate_design_files_main", return_value=[]), \
+         patch("run_pipeline.run_feat_main") as mock_run_feat:
+
+        run_pipeline.main()
+
+    log_files = list((output_dir / "logs").glob("pipeline_*.log"))
+    assert len(log_files) == 1
+
+    motion_log_file = mock_motion.call_args.kwargs["log_file"]
+    synthstrip_log_file = mock_synthstrip.call_args.kwargs["log_file"]
+    feat_log_file = mock_run_feat.call_args.kwargs["log_file"]
+
+    assert motion_log_file == str(log_files[0])
+    assert synthstrip_log_file == str(log_files[0])
+    assert feat_log_file == str(log_files[0])
+
+    content = log_files[0].read_text()
+    assert "=== Begin pipeline run ===" in content
+    assert "=== Begin subject sub-001 ===" in content
+    assert "=== End subject sub-001 ===" in content
+    assert "=== End pipeline run ===" in content
+
+
 def test_run_pipeline_missing_args():
     with patch.object(sys, "argv", ["run_pipeline.py"]):
         with pytest.raises(SystemExit):
